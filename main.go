@@ -156,7 +156,9 @@ func mainWithError() error {
 			globalFileCount += fileCount
 		}
 	}
-	fmt.Printf("Total files written: %d\n", globalFileCount)
+	if !opts.quiet {
+		fmt.Printf("Total files written: %d\n", globalFileCount)
+	}
 	return nil
 }
 
@@ -239,12 +241,12 @@ func processUnstructured(item *unstructured.Unstructured, isNamespaced bool, opt
 	return nil
 }
 
-func writeYAML(filePath string, obj map[string]interface{}, options *options) error {
+func writeYAML(filePath string, obj map[string]interface{}, opts *options) error {
 	metadata, ok := obj["metadata"].(map[string]interface{})
 	if !ok {
 		return fmt.Errorf("metadata not found in object")
 	}
-	if !options.dumpManagedFields {
+	if !opts.dumpManagedFields {
 		delete(metadata, "managedFields")
 	}
 
@@ -260,7 +262,7 @@ func writeYAML(filePath string, obj map[string]interface{}, options *options) er
 	if err := encoder.Encode(obj); err != nil {
 		return fmt.Errorf("failed to write YAML to file %s: %w", filePath, err)
 	}
-	if !options.quiet {
+	if !opts.quiet {
 		fmt.Printf("Written: %s\n", filePath)
 	}
 	return nil
