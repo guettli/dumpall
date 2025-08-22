@@ -84,7 +84,11 @@ func mainWithError() error {
 	pflag.BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
 	pflag.BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
 	pflag.BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
-	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "read --- sperated manifests from file")
+	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "read --- sperated manifests from file (do not connect to api-server)")
+	pflag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s\nRead all resources from the api-server and dumps each resource to a file.\n", os.Args[0])
+		pflag.PrintDefaults()
+	}
 	pflag.Parse()
 
 	if len(pflag.Args()) > 0 {
@@ -200,7 +204,11 @@ func readYamlFromFile(fileName string, opts *options) error {
 		}
 		fileCount++
 	}
-	fmt.Printf("Total files written: %d\n", fileCount)
+
+	if !opts.quiet {
+		fmt.Printf("Total files written: %d\n", fileCount)
+	}
+
 	return nil
 }
 
