@@ -87,6 +87,11 @@ func mainWithError() error {
 	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "read --- sperated manifests from file")
 	pflag.Parse()
 
+	if len(pflag.Args()) > 0 {
+		pflag.Usage()
+		return fmt.Errorf("unexpected positional arguments: %v", pflag.Args())
+	}
+
 	if opts.removeOutdir {
 		if err := os.RemoveAll(opts.outputDir); err != nil {
 			return fmt.Errorf("failed to remove out-dir %s: %w", opts.outputDir, err)
@@ -162,7 +167,7 @@ func mainWithError() error {
 	return nil
 }
 
-func readYamlFromFile(fileName string, options *options) error {
+func readYamlFromFile(fileName string, opts *options) error {
 	fileCount := int64(0)
 	f, err := os.Open(fileName)
 	if err != nil {
@@ -189,7 +194,7 @@ func readYamlFromFile(fileName string, options *options) error {
 			return fmt.Errorf("failed to get namespace for item %s: %w", u.GetName(), err)
 		}
 		isNamespaced := ns != ""
-		err = processUnstructured(u, isNamespaced, options)
+		err = processUnstructured(u, isNamespaced, opts)
 		if err != nil {
 			return fmt.Errorf("failed to process item %s: %w", u.GetName(), err)
 		}
@@ -216,7 +221,7 @@ func processGVR(client dynamic.Interface, gvr schema.GroupVersionResource, isNam
 	return fileCount, nil
 }
 
-func processUnstructured(item *unstructured.Unstructured, isNamespaced bool, options *options) error {
+func processUnstructured(item *unstructured.Unstructured, isNamespaced bool, opts *options) error {
 	ns := item.GetNamespace()
 	if !isNamespaced {
 		ns = clusterNamespace
@@ -226,15 +231,15 @@ func processUnstructured(item *unstructured.Unstructured, isNamespaced bool, opt
 
 	var dirPath string
 	if gvk.Group == "" {
-		dirPath = filepath.Join(options.outputDir, ns, gvk.Kind)
+		dirPath = filepath.Join(opts.outputDir, ns, gvk.Kind)
 	} else {
-		dirPath = filepath.Join(options.outputDir, ns, fmt.Sprintf("%s_%s", gvk.Group, gvk.Kind))
+		dirPath = filepath.Join(opts.outputDir, ns, fmt.Sprintf("%s_%s", gvk.Group, gvk.Kind))
 	}
 	if err := os.MkdirAll(dirPath, 0o755); err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dirPath, err)
 	}
 	filePath := filepath.Join(dirPath, fmt.Sprintf("%s.yaml", sanitizePath(name)))
-	err := writeYAML(filePath, item.Object, options)
+	err := writeYAML(filePath, item.Object, opts)
 	if err != nil {
 		fmt.Printf("Failed to write YAML for %s: %v\n", filePath, err)
 	}
