@@ -26,7 +26,8 @@ import (
 )
 
 const (
-	clusterNamespace = "_cluster"
+	clusterNamespace    = "_cluster"
+	redactedSecretValue = "REDCATED-BY-DUMPALL"
 )
 
 var toSkip = map[string][]string{
@@ -262,6 +263,9 @@ func writeYAML(filePath string, obj map[string]interface{}, opts *options) error
 	if !opts.dumpManagedFields {
 		delete(metadata, "managedFields")
 	}
+	if !opts.dumpSecrets {
+		redactSecretValues(obj)
+	}
 
 	file, err := os.Create(filePath)
 	if err != nil {
@@ -298,4 +302,43 @@ var sanitizePathRegex = regexp.MustCompile(`[\\/:*?"'<>|!@#$%^&()+={}\[\];,]`)
 
 func sanitizePath(path string) string {
 	return sanitizePathRegex.ReplaceAllString(path, "_")
+}
+
+func redactSecretValues(obj map[string]interface{}) {
+	if !isCoreV1Secret(obj) {
+		return
+	}
+	redactSecretField(obj, "data")
+	redactSecretField(obj, "stringData")
+}
+
+var secretApiGroupRegex = regexp.MustCompile(`^v\d+`)
+
+func isCoreV1Secret(obj map[string]interface{}) bool {
+	kind, _ := obj["kind"].(string)
+	if kind != "Secret" {
+		return false
+	}
+	apiVersion, _ := obj["apiVersion"].(string)
+	if apiVersion == "" {
+		return true
+	}
+	if secretApiGroupRegex.MatchString(apiVersion) {
+		return true
+	}
+
+	return false
+}
+
+func redactSecretField(obj map[string]interface{}, field string) {
+	switch entries := obj[field].(type) {
+	case map[string]interface{}:
+		for key := range entries {
+			entries[key] = redactedSecretValue
+		}
+	case map[string]string:
+		for key := range entries {
+			entries[key] = redactedSecretValue
+		}
+	}
 }
