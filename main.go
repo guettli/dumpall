@@ -42,7 +42,7 @@ var toSkip = map[string][]string{
 	"coordination.k8s.io/v1": {"leases"},
 	"discovery.k8s.io/v1":    {"endpointslices"},
 	"events.k8s.io/v1":       {"events"},
-	"v1":                     {"events", "bindings", "componentstatuses"},
+	"v1":                     {"events", "bindings", "componentstatuses", "endpoints"},
 }
 
 type options struct {
