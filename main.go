@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -26,8 +27,10 @@ import (
 )
 
 const (
-	clusterNamespace    = "_cluster"
-	redactedSecretValue = "REDCATED-BY-DUMPALL"
+	clusterNamespace       = "_cluster"
+	redactionMarkerValue   = "REDCATED-BY-DUMPALL"
+	toolNameForUsageOutput = "dumpall"
+	lastAppliedAnnotation  = "kubectl.kubernetes.io/last-applied-configuration"
 )
 
 var toSkip = map[string][]string{
@@ -57,20 +60,25 @@ type options struct {
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "gendocs" {
 		b := &bytes.Buffer{}
+
 		err := cobradoc.WriteDocument(b, cmd.RootCmd, cobradoc.Markdown, cobradoc.Options{})
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
+
 		usageFile := "usage.md"
+
 		err = os.WriteFile(usageFile, b.Bytes(), 0o600)
 		if err != nil {
 			fmt.Println(err)
 			os.Exit(1)
 		}
+
 		fmt.Printf("Created %q\n", usageFile)
 		os.Exit(0)
 	}
+
 	err := mainWithError()
 	if err != nil {
 		fmt.Println(err)
@@ -86,10 +94,12 @@ func mainWithError() error {
 	pflag.BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
 	pflag.BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
 	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "read --- sperated manifests from file (do not connect to api-server)")
+
 	pflag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s\nRead all resources from the api-server and dumps each resource to a file.\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Usage: %s\nRead all resources from the api-server and dumps each resource to a file.\n", toolNameForUsageOutput)
 		pflag.PrintDefaults()
 	}
+
 	pflag.Parse()
 
 	if len(pflag.Args()) > 0 {
@@ -98,17 +108,25 @@ func mainWithError() error {
 	}
 
 	if opts.removeOutdir {
-		if err := os.RemoveAll(opts.outputDir); err != nil {
+		err := os.RemoveAll(opts.outputDir)
+		if err != nil {
 			return fmt.Errorf("failed to remove out-dir %s: %w", opts.outputDir, err)
 		}
 	}
 
-	if _, err := os.Stat(opts.outputDir); err == nil {
+	_, err := os.Stat(opts.outputDir)
+	if err == nil {
 		return fmt.Errorf("output directory %q already exists. Use --remove-out-dir if you want to overwrite it", opts.outputDir)
 	}
+
+	if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to inspect output directory %q: %w", opts.outputDir, err)
+	}
+
 	if opts.fileName != "" {
 		return readYamlFromFile(opts.fileName, opts)
 	}
+
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
 	configOverrides := &clientcmd.ConfigOverrides{}
 	kubeconfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
@@ -129,6 +147,7 @@ func mainWithError() error {
 	if err != nil {
 		return fmt.Errorf("failed to create dynamic client: %w", err)
 	}
+
 	discoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
 	if err != nil {
 		return fmt.Errorf("failed to create discovery client: %w", err)
@@ -140,13 +159,16 @@ func mainWithError() error {
 	}
 
 	var globalFileCount int64
+
 	sort.Slice(resourceList, func(i int, j int) bool {
 		return resourceList[i].GroupVersion < resourceList[j].GroupVersion
 	})
+
 	for _, apiGroup := range resourceList {
 		sort.Slice(apiGroup.APIResources, func(i int, j int) bool {
 			return apiGroup.APIResources[i].Name < apiGroup.APIResources[j].Name
 		})
+
 		for _, resource := range apiGroup.APIResources {
 			skipSlice := toSkip[apiGroup.GroupVersion]
 			if slices.Contains(skipSlice, resource.Name) {
@@ -163,46 +185,59 @@ func mainWithError() error {
 			if err != nil {
 				fmt.Printf("Failed to process resource %q %s: %v\n", apiGroup.GroupVersion, resource.Name, err)
 			}
+
 			globalFileCount += fileCount
 		}
 	}
+
 	if !opts.quiet {
 		fmt.Printf("Total files written: %d\n", globalFileCount)
 	}
+
 	return nil
 }
 
 func readYamlFromFile(fileName string, opts *options) error {
 	fileCount := int64(0)
+
 	f, err := os.Open(fileName)
 	if err != nil {
 		return fmt.Errorf("failed to open file %s: %w", fileName, err)
 	}
 	defer f.Close()
+
 	bytes, err := io.ReadAll(f)
 	if err != nil {
 		return fmt.Errorf("failed to read file %s: %w", fileName, err)
 	}
+
 	nodes, err := kio.FromBytes(bytes)
 	if err != nil {
 		return fmt.Errorf("failed to parse YAML: %w", err)
 	}
+
 	for i := range nodes {
 		node := nodes[i]
+
 		m, err := node.Map()
 		if err != nil {
 			return fmt.Errorf("failed to convert node to map: %w", err)
 		}
+
 		u := &unstructured.Unstructured{Object: m}
+
 		ns, _, err := unstructured.NestedString(m, "metadata", "namespace")
 		if err != nil {
 			return fmt.Errorf("failed to get namespace for item %s: %w", u.GetName(), err)
 		}
+
 		isNamespaced := ns != ""
+
 		err = processUnstructured(u, isNamespaced, opts)
 		if err != nil {
 			return fmt.Errorf("failed to process item %s: %w", u.GetName(), err)
 		}
+
 		fileCount++
 	}
 
@@ -215,18 +250,23 @@ func readYamlFromFile(fileName string, opts *options) error {
 
 func processGVR(client dynamic.Interface, gvr schema.GroupVersionResource, isNamespaced bool, options *options) (count int64, err error) {
 	var fileCount int64
+
 	list, err := client.Resource(gvr).List(context.TODO(), meta.ListOptions{})
 	if err != nil {
 		return fileCount, fmt.Errorf("failed to list resources for %s: %w", gvr.Resource, err)
 	}
+
 	for i := range list.Items {
 		item := &list.Items[i]
+
 		err := processUnstructured(item, isNamespaced, options)
 		if err != nil {
 			return fileCount, fmt.Errorf("failed to process item %s: %w", item.GetName(), err)
 		}
+
 		fileCount++
 	}
+
 	return fileCount, nil
 }
 
@@ -235,6 +275,7 @@ func processUnstructured(item *unstructured.Unstructured, isNamespaced bool, opt
 	if !isNamespaced {
 		ns = clusterNamespace
 	}
+
 	gvk := item.GroupVersionKind()
 	name := item.GetName()
 
@@ -244,25 +285,32 @@ func processUnstructured(item *unstructured.Unstructured, isNamespaced bool, opt
 	} else {
 		dirPath = filepath.Join(opts.outputDir, ns, fmt.Sprintf("%s_%s", gvk.Group, gvk.Kind))
 	}
-	if err := os.MkdirAll(dirPath, 0o755); err != nil {
+
+	err := os.MkdirAll(dirPath, 0o755)
+	if err != nil {
 		return fmt.Errorf("failed to create directory %s: %w", dirPath, err)
 	}
+
 	filePath := filepath.Join(dirPath, fmt.Sprintf("%s.yaml", sanitizePath(name)))
-	err := writeYAML(filePath, item.Object, opts)
+
+	err = writeYAML(filePath, item.Object, opts)
 	if err != nil {
 		fmt.Printf("Failed to write YAML for %s: %v\n", filePath, err)
 	}
+
 	return nil
 }
 
-func writeYAML(filePath string, obj map[string]interface{}, opts *options) error {
-	metadata, ok := obj["metadata"].(map[string]interface{})
+func writeYAML(filePath string, obj map[string]any, opts *options) error {
+	metadata, ok := obj["metadata"].(map[string]any)
 	if !ok {
 		return fmt.Errorf("metadata not found in object")
 	}
+
 	if !opts.dumpManagedFields {
 		delete(metadata, "managedFields")
 	}
+
 	if !opts.dumpSecrets {
 		redactSecretValues(obj)
 	}
@@ -275,13 +323,18 @@ func writeYAML(filePath string, obj map[string]interface{}, opts *options) error
 
 	encoder := yaml.NewEncoder(file)
 	defer encoder.Close()
+
 	encoder.SetIndent(2)
-	if err := encoder.Encode(obj); err != nil {
+
+	err = encoder.Encode(obj)
+	if err != nil {
 		return fmt.Errorf("failed to write YAML to file %s: %w", filePath, err)
 	}
+
 	if !opts.quiet {
 		fmt.Printf("Written: %s\n", filePath)
 	}
+
 	return nil
 }
 
@@ -290,6 +343,7 @@ func getGroup(groupVersion string) string {
 	if len(parts) > 1 {
 		return parts[0]
 	}
+
 	return ""
 }
 
@@ -304,41 +358,59 @@ func sanitizePath(path string) string {
 	return sanitizePathRegex.ReplaceAllString(path, "_")
 }
 
-func redactSecretValues(obj map[string]interface{}) {
+func redactSecretValues(obj map[string]any) {
 	if !isCoreV1Secret(obj) {
 		return
 	}
+
 	redactSecretField(obj, "data")
 	redactSecretField(obj, "stringData")
+	redactSecretAnnotations(obj)
 }
 
-var secretApiGroupRegex = regexp.MustCompile(`^v\d+`)
+var secretAPIGroupRegex = regexp.MustCompile(`^v\d+`)
 
-func isCoreV1Secret(obj map[string]interface{}) bool {
+func isCoreV1Secret(obj map[string]any) bool {
 	kind, _ := obj["kind"].(string)
 	if kind != "Secret" {
 		return false
 	}
+
 	apiVersion, _ := obj["apiVersion"].(string)
 	if apiVersion == "" {
 		return true
 	}
-	if secretApiGroupRegex.MatchString(apiVersion) {
+
+	if secretAPIGroupRegex.MatchString(apiVersion) {
 		return true
 	}
 
 	return false
 }
 
-func redactSecretField(obj map[string]interface{}, field string) {
+func redactSecretField(obj map[string]any, field string) {
 	switch entries := obj[field].(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		for key := range entries {
-			entries[key] = redactedSecretValue
+			entries[key] = redactionMarkerValue
 		}
 	case map[string]string:
 		for key := range entries {
-			entries[key] = redactedSecretValue
+			entries[key] = redactionMarkerValue
 		}
+	}
+}
+
+func redactSecretAnnotations(obj map[string]any) {
+	metadata, ok := obj["metadata"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	switch annotations := metadata["annotations"].(type) {
+	case map[string]any:
+		delete(annotations, lastAppliedAnnotation)
+	case map[string]string:
+		delete(annotations, lastAppliedAnnotation)
 	}
 }
