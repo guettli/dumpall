@@ -14,6 +14,10 @@ out/kube-system/v1.ConfigMap/kubelet-config.yaml
 
 The resources of kind Secret are not dumped by default. If needed, use `--dump-secrets`.
 
+To dump only specific namespaces, use `--namespaces` (or `-n`) with a comma-separated list, for example `--namespaces kube-system,default`.
+
+To dump only resources whose `metadata.name` matches a regex, use `--name-regex` (or `-x`), for example `--name-regex '^kube-apiserver-.*'`.
+
 ## Via `go run`
 
 The easiest way is to run the code like this:

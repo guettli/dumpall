@@ -55,6 +55,11 @@ type options struct {
 	dumpManagedFields bool
 	removeOutdir      bool
 	fileName          string
+	namespacesCSV     string
+	nameRegex         string
+	namespaceFilter   map[string]struct{}
+	nameFilterEnabled bool
+	nameFilterRegex   *regexp.Regexp
 }
 
 func main() {
@@ -93,6 +98,8 @@ func mainWithError() error {
 	pflag.BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
 	pflag.BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
 	pflag.BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
+	pflag.StringVarP(&opts.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to dump")
+	pflag.StringVarP(&opts.nameRegex, "name-regex", "x", "", "Only dump resources where metadata.name matches this regex")
 	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "read --- sperated manifests from file (do not connect to api-server)")
 
 	pflag.Usage = func() {
@@ -107,6 +114,21 @@ func mainWithError() error {
 		return fmt.Errorf("unexpected positional arguments: %v", pflag.Args())
 	}
 
+	namespaceFilter, err := parseNamespaceFilter(opts.namespacesCSV)
+	if err != nil {
+		return err
+	}
+
+	opts.namespaceFilter = namespaceFilter
+
+	nameFilterRegex, nameFilterEnabled, err := parseNameFilterRegex(opts.nameRegex)
+	if err != nil {
+		return err
+	}
+
+	opts.nameFilterEnabled = nameFilterEnabled
+	opts.nameFilterRegex = nameFilterRegex
+
 	if opts.removeOutdir {
 		err := os.RemoveAll(opts.outputDir)
 		if err != nil {
@@ -114,7 +136,7 @@ func mainWithError() error {
 		}
 	}
 
-	_, err := os.Stat(opts.outputDir)
+	_, err = os.Stat(opts.outputDir)
 	if err == nil {
 		return fmt.Errorf("output directory %q already exists. Use --remove-out-dir if you want to overwrite it", opts.outputDir)
 	}
@@ -233,6 +255,10 @@ func readYamlFromFile(fileName string, opts *options) error {
 
 		isNamespaced := ns != ""
 
+		if !shouldProcessItem(u, isNamespaced, opts) {
+			continue
+		}
+
 		err = processUnstructured(u, isNamespaced, opts)
 		if err != nil {
 			return fmt.Errorf("failed to process item %s: %w", u.GetName(), err)
@@ -258,6 +284,10 @@ func processGVR(client dynamic.Interface, gvr schema.GroupVersionResource, isNam
 
 	for i := range list.Items {
 		item := &list.Items[i]
+
+		if !shouldProcessItem(item, isNamespaced, options) {
+			continue
+		}
 
 		err := processUnstructured(item, isNamespaced, options)
 		if err != nil {
@@ -350,6 +380,68 @@ func getGroup(groupVersion string) string {
 func getVersion(groupVersion string) string {
 	parts := strings.Split(groupVersion, "/")
 	return parts[len(parts)-1]
+}
+
+func parseNamespaceFilter(namespacesCSV string) (map[string]struct{}, error) {
+	filter := make(map[string]struct{})
+
+	trimmed := strings.TrimSpace(namespacesCSV)
+	if trimmed == "" {
+		return filter, nil
+	}
+
+	for _, namespace := range strings.Split(namespacesCSV, ",") {
+		namespace = strings.TrimSpace(namespace)
+		if namespace == "" {
+			continue
+		}
+
+		filter[namespace] = struct{}{}
+	}
+
+	if len(filter) == 0 {
+		return nil, fmt.Errorf("invalid --namespaces %q: no namespace names found", namespacesCSV)
+	}
+
+	return filter, nil
+}
+
+func parseNameFilterRegex(nameRegex string) (*regexp.Regexp, bool, error) {
+	trimmed := strings.TrimSpace(nameRegex)
+	if trimmed == "" {
+		return regexp.MustCompile(""), false, nil
+	}
+
+	re, err := regexp.Compile(trimmed)
+	if err != nil {
+		return nil, false, fmt.Errorf("invalid --name-regex %q: %w", nameRegex, err)
+	}
+
+	return re, true, nil
+}
+
+func shouldProcessItem(item *unstructured.Unstructured, isNamespaced bool, opts *options) bool {
+	if opts.nameFilterEnabled {
+		if !opts.nameFilterRegex.MatchString(item.GetName()) {
+			return false
+		}
+	}
+
+	if len(opts.namespaceFilter) == 0 {
+		return true
+	}
+
+	if isNamespaced {
+		_, ok := opts.namespaceFilter[item.GetNamespace()]
+		return ok
+	}
+
+	if item.GetKind() == "Namespace" {
+		_, ok := opts.namespaceFilter[item.GetName()]
+		return ok
+	}
+
+	return false
 }
 
 var sanitizePathRegex = regexp.MustCompile(`[\\/:*?"'<>|!@#$%^&()+={}\[\];,]`)
