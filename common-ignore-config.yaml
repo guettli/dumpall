@@ -4,6 +4,7 @@ rules:
       - metadata.creationTimestamp
       - metadata.generation
       - metadata.managedFields
+      - metadata.ownerReferences
       - metadata.resourceVersion
       - metadata.uid
       - metadata.annotations.clusterctl\.cluster\.x-k8s\.io

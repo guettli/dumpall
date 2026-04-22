@@ -409,6 +409,7 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 	}
 
 	applyIgnoreRules(obj, opts)
+	pruneEmptyMaps(obj)
 
 	file, err := os.Create(filePath)
 	if err != nil {
@@ -431,6 +432,67 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 	}
 
 	return nil
+}
+
+func pruneEmptyMaps(obj map[string]any) {
+	pruneEmptyMapsValue(obj)
+}
+
+func pruneEmptyMapsValue(value any) (any, bool) {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			prunedChild, remove := pruneEmptyMapsValue(child)
+			if remove {
+				delete(typed, key)
+				continue
+			}
+
+			typed[key] = prunedChild
+		}
+
+		return typed, len(typed) == 0
+	case map[string]string:
+		return typed, len(typed) == 0
+	case []any:
+		pruned := typed[:0]
+		for _, child := range typed {
+			prunedChild, remove := pruneEmptyMapsValue(child)
+			if remove {
+				continue
+			}
+
+			pruned = append(pruned, prunedChild)
+		}
+
+		return pruned, false
+	case []map[string]any:
+		pruned := typed[:0]
+		for _, child := range typed {
+			prunedChild, remove := pruneEmptyMapsValue(child)
+			if remove {
+				continue
+			}
+
+			pruned = append(pruned, prunedChild.(map[string]any))
+		}
+
+		return pruned, false
+	case []map[string]string:
+		pruned := typed[:0]
+		for _, child := range typed {
+			prunedChild, remove := pruneEmptyMapsValue(child)
+			if remove {
+				continue
+			}
+
+			pruned = append(pruned, prunedChild.(map[string]string))
+		}
+
+		return pruned, false
+	default:
+		return value, false
+	}
 }
 
 func writeCommonIgnoreConfig(w io.Writer) error {

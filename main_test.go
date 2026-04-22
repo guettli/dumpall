@@ -78,6 +78,76 @@ func TestWriteYAML_DumpSecretsKeepsSecretValues(t *testing.T) {
 	}
 }
 
+func TestWriteYAML_PrunesEmptyAnnotationsAfterRedaction(t *testing.T) {
+	t.Parallel()
+
+	fixtureValue := "fixture-redaction-target-3"
+	obj := secretObject(fixtureValue)
+	annotations := obj["metadata"].(map[string]any)["annotations"].(map[string]any)
+	delete(annotations, "other")
+
+	outFile := filepath.Join(t.TempDir(), "secret.yaml")
+	opts := &options{quiet: true}
+
+	err := writeYAML(outFile, obj, opts)
+	if err != nil {
+		t.Fatalf("writeYAML returned error: %v", err)
+	}
+
+	contentBytes, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+
+	content := string(contentBytes)
+
+	if strings.Contains(content, "annotations:") {
+		t.Fatalf("expected empty annotations map to be pruned, got:\n%s", content)
+	}
+}
+
+func TestPruneEmptyMaps_RemovesNestedMapFieldsAndListEntries(t *testing.T) {
+	t.Parallel()
+
+	obj := map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{},
+			"labels": map[string]any{
+				"app": "demo",
+			},
+		},
+		"webhooks": []any{
+			map[string]any{
+				"namespaceSelector": map[string]any{},
+				"rules": []any{
+					map[string]any{},
+					map[string]any{
+						"operations": []any{"CREATE"},
+					},
+				},
+			},
+		},
+	}
+
+	pruneEmptyMaps(obj)
+
+	metadata := obj["metadata"].(map[string]any)
+	if _, ok := metadata["annotations"]; ok {
+		t.Fatalf("expected empty annotations map to be pruned")
+	}
+
+	webhooks := obj["webhooks"].([]any)
+	webhook := webhooks[0].(map[string]any)
+	if _, ok := webhook["namespaceSelector"]; ok {
+		t.Fatalf("expected empty namespaceSelector map to be pruned")
+	}
+
+	rules := webhook["rules"].([]any)
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 non-empty rule, got %d", len(rules))
+	}
+}
+
 func secretObject(fixtureValue string) map[string]any {
 	return map[string]any{
 		"apiVersion": "v1",
@@ -392,14 +462,13 @@ func TestWriteYAML_NoIgnoreRulesByDefault(t *testing.T) {
 
 	for _, expected := range []string{
 		"creationTimestamp:",
+		"ownerReferences:",
 		"resourceVersion:",
 		"uid:",
 		"clusterctl.cluster.x-k8s.io",
 		lastAppliedAnnotation,
 		"caBundle:",
 		"matchPolicy:",
-		"namespaceSelector:",
-		"objectSelector:",
 		"reinvocationPolicy:",
 		"timeoutSeconds:",
 		"scope:",
@@ -438,7 +507,9 @@ func TestWriteYAML_CommonIgnoreConfigApplied(t *testing.T) {
 	content := string(contentBytes)
 
 	for _, unwanted := range []string{
+		"annotations:",
 		"creationTimestamp:",
+		"ownerReferences:",
 		"resourceVersion:",
 		"uid:",
 		"clusterctl.cluster.x-k8s.io",
@@ -600,8 +671,16 @@ func webhookObject() map[string]any {
 			"name":              "capi-mutating-webhook-configuration",
 			"creationTimestamp": "2026-04-22T00:00:00Z",
 			"generation":        int64(2),
-			"resourceVersion":   "123",
-			"uid":               "uid-1",
+			"ownerReferences": []any{
+				map[string]any{
+					"apiVersion": "v1",
+					"kind":       "Namespace",
+					"name":       "capi-system",
+					"uid":        "owner-uid-1",
+				},
+			},
+			"resourceVersion": "123",
+			"uid":             "uid-1",
 			"annotations": map[string]any{
 				"clusterctl.cluster.x-k8s.io": "",
 				lastAppliedAnnotation:         "present",
