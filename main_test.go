@@ -561,6 +561,7 @@ func TestWriteYAML_NoIgnoreRulesByDefault(t *testing.T) {
 		"ownerReferences:",
 		"resourceVersion:",
 		"uid:",
+		"deployment.kubernetes.io/revision",
 		"clusterctl.cluster.x-k8s.io",
 		lastAppliedAnnotation,
 		"caBundle:",
@@ -608,6 +609,7 @@ func TestWriteYAML_CommonIgnoreConfigApplied(t *testing.T) {
 		"ownerReferences:",
 		"resourceVersion:",
 		"uid:",
+		"deployment.kubernetes.io/revision",
 		"clusterctl.cluster.x-k8s.io",
 		lastAppliedAnnotation,
 		"caBundle:",
@@ -778,8 +780,9 @@ func webhookObject() map[string]any {
 			"resourceVersion": "123",
 			"uid":             "uid-1",
 			"annotations": map[string]any{
-				"clusterctl.cluster.x-k8s.io": "",
-				lastAppliedAnnotation:         "present",
+				"deployment.kubernetes.io/revision": "2",
+				"clusterctl.cluster.x-k8s.io":       "",
+				lastAppliedAnnotation:               "present",
 			},
 		},
 		"webhooks": []any{

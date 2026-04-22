@@ -7,6 +7,7 @@ rules:
       - metadata.ownerReferences
       - metadata.resourceVersion
       - metadata.uid
+      - metadata.annotations.deployment\.kubernetes\.io/revision
       - metadata.annotations.clusterctl\.cluster\.x-k8s\.io
       - metadata.annotations.kubectl\.kubernetes\.io/last-applied-configuration
       - status

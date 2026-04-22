@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -101,6 +102,25 @@ type objectIdentity struct {
 	Kind      string
 	Namespace string
 	Name      string
+}
+
+type resourceWriteJob struct {
+	item         *unstructured.Unstructured
+	isNamespaced bool
+	sourceName   string
+}
+
+type gvrListJob struct {
+	groupVersion string
+	resourceName string
+	gvr          schema.GroupVersionResource
+	isNamespaced bool
+}
+
+type processingEvent struct {
+	writtenFile string
+	logMessage  string
+	err         error
 }
 
 func main() {
@@ -236,12 +256,10 @@ func mainWithError() error {
 		return fmt.Errorf("failed to get client config: %w", err)
 	}
 
-	// 80 concurrent requests were served in roughly 200ms
-	// This means 400 requests in one second (to local kind cluster)
-	// But why reduce this? I don't want people with better hardware
-	// to wait for getting results from an api-server running at localhost
-	config.QPS = 1000
-	config.Burst = 1000
+	// Disable client-side throttling. Modern api-servers can handle this,
+	// and dumpall already bounds concurrency with worker pools.
+	config.QPS = -1
+	config.Burst = -1
 
 	dynClient, err := dynamic.NewForConfig(config)
 	if err != nil {
@@ -258,43 +276,7 @@ func mainWithError() error {
 		return fmt.Errorf("failed to discover resources: %w", err)
 	}
 
-	var globalFileCount int64
-
-	sort.Slice(resourceList, func(i int, j int) bool {
-		return resourceList[i].GroupVersion < resourceList[j].GroupVersion
-	})
-
-	for _, apiGroup := range resourceList {
-		sort.Slice(apiGroup.APIResources, func(i int, j int) bool {
-			return apiGroup.APIResources[i].Name < apiGroup.APIResources[j].Name
-		})
-
-		for _, resource := range apiGroup.APIResources {
-			skipSlice := toSkip[apiGroup.GroupVersion]
-			if slices.Contains(skipSlice, resource.Name) {
-				continue
-			}
-
-			gvr := schema.GroupVersionResource{
-				Group:    getGroup(apiGroup.GroupVersion),
-				Version:  getVersion(apiGroup.GroupVersion),
-				Resource: resource.Name,
-			}
-
-			fileCount, err := processGVR(dynClient, gvr, resource.Namespaced, opts)
-			if err != nil {
-				fmt.Printf("Failed to process resource %q %s: %v\n", apiGroup.GroupVersion, resource.Name, err)
-			}
-
-			globalFileCount += fileCount
-		}
-	}
-
-	if !opts.quiet {
-		fmt.Printf("Total files written: %d\n", globalFileCount)
-	}
-
-	return nil
+	return readFromAPIServer(dynClient, resourceList, opts)
 }
 
 func validateInputSources(fileName string, inputDir string) error {
@@ -306,21 +288,31 @@ func validateInputSources(fileName string, inputDir string) error {
 }
 
 func readYamlFromFile(fileName string, opts *options) error {
-	bytes, err := os.ReadFile(fileName)
-	if err != nil {
-		return fmt.Errorf("failed to read file %s: %w", fileName, err)
-	}
+	writeJobs, events, writerDone, writerCount := startWriteWorkers(opts)
+	producerDone := make(chan struct{}, 1)
 
-	fileCount, err := processYAMLBytes(bytes, fileName, opts)
-	if err != nil {
-		return err
-	}
+	go func() {
+		defer func() {
+			producerDone <- struct{}{}
+		}()
 
-	if !opts.quiet {
-		fmt.Printf("Total files written: %d\n", fileCount)
-	}
+		bytes, err := os.ReadFile(fileName)
+		if err != nil {
+			events <- processingEvent{
+				err: fmt.Errorf("failed to read file %s: %w", fileName, err),
+			}
+			return
+		}
 
-	return nil
+		err = enqueueYAMLBytesAsJobs(bytes, fileName, opts, writeJobs)
+		if err != nil {
+			events <- processingEvent{err: err}
+		}
+	}()
+
+	closeEventsWhenDone(producerDone, 1, writerDone, writerCount, writeJobs, events)
+
+	return finalizeProcessing(events, opts)
 }
 
 func readYamlFromDir(dirPath string, opts *options) error {
@@ -329,26 +321,45 @@ func readYamlFromDir(dirPath string, opts *options) error {
 		return err
 	}
 
-	fileCount := int64(0)
-	for _, filePath := range yamlFiles {
-		bytes, err := os.ReadFile(filePath)
-		if err != nil {
-			return fmt.Errorf("failed to read file %s: %w", filePath, err)
-		}
+	writeJobs, events, writerDone, writerCount := startWriteWorkers(opts)
 
-		written, err := processYAMLBytes(bytes, filePath, opts)
-		if err != nil {
-			return err
-		}
+	fileWorkerCount := boundedWorkerCount(len(yamlFiles))
+	fileJobs := make(chan string, fileWorkerCount*2)
+	producerDone := make(chan struct{}, fileWorkerCount)
 
-		fileCount += written
+	for range fileWorkerCount {
+		go func() {
+			defer func() {
+				producerDone <- struct{}{}
+			}()
+
+			for filePath := range fileJobs {
+				bytes, err := os.ReadFile(filePath)
+				if err != nil {
+					events <- processingEvent{
+						err: fmt.Errorf("failed to read file %s: %w", filePath, err),
+					}
+					continue
+				}
+
+				err = enqueueYAMLBytesAsJobs(bytes, filePath, opts, writeJobs)
+				if err != nil {
+					events <- processingEvent{err: err}
+				}
+			}
+		}()
 	}
 
-	if !opts.quiet {
-		fmt.Printf("Total files written: %d\n", fileCount)
-	}
+	go func() {
+		for _, filePath := range yamlFiles {
+			fileJobs <- filePath
+		}
+		close(fileJobs)
+	}()
 
-	return nil
+	closeEventsWhenDone(producerDone, fileWorkerCount, writerDone, writerCount, writeJobs, events)
+
+	return finalizeProcessing(events, opts)
 }
 
 func findYAMLFiles(dirPath string) ([]string, error) {
@@ -396,26 +407,25 @@ func isYAMLFile(filePath string) bool {
 	}
 }
 
-func processYAMLBytes(bytes []byte, sourceName string, opts *options) (int64, error) {
+func enqueueYAMLBytesAsJobs(bytes []byte, sourceName string, opts *options, jobs chan<- resourceWriteJob) error {
 	nodes, err := kio.FromBytes(bytes)
 	if err != nil {
-		return 0, fmt.Errorf("failed to parse YAML in %s: %w", sourceName, err)
+		return fmt.Errorf("failed to parse YAML in %s: %w", sourceName, err)
 	}
 
-	fileCount := int64(0)
 	for i := range nodes {
 		node := nodes[i]
 
 		m, err := node.Map()
 		if err != nil {
-			return 0, fmt.Errorf("failed to convert document %d in %s to map: %w", i+1, sourceName, err)
+			return fmt.Errorf("failed to convert document %d in %s to map: %w", i+1, sourceName, err)
 		}
 
 		u := &unstructured.Unstructured{Object: m}
 
 		ns, _, err := unstructured.NestedString(m, "metadata", "namespace")
 		if err != nil {
-			return 0, fmt.Errorf("failed to get namespace for item %s in %s: %w", u.GetName(), sourceName, err)
+			return fmt.Errorf("failed to get namespace for item %s in %s: %w", u.GetName(), sourceName, err)
 		}
 
 		isNamespaced := ns != ""
@@ -424,44 +434,201 @@ func processYAMLBytes(bytes []byte, sourceName string, opts *options) (int64, er
 			continue
 		}
 
-		err = processUnstructured(u, isNamespaced, opts)
-		if err != nil {
-			return 0, fmt.Errorf("failed to process item %s from %s: %w", u.GetName(), sourceName, err)
+		jobs <- resourceWriteJob{
+			item:         u,
+			isNamespaced: isNamespaced,
+			sourceName:   sourceName,
 		}
-
-		fileCount++
 	}
 
-	return fileCount, nil
+	return nil
 }
 
-func processGVR(client dynamic.Interface, gvr schema.GroupVersionResource, isNamespaced bool, options *options) (count int64, err error) {
-	var fileCount int64
+func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourceList, opts *options) error {
+	sort.Slice(resourceList, func(i int, j int) bool {
+		return resourceList[i].GroupVersion < resourceList[j].GroupVersion
+	})
 
-	list, err := client.Resource(gvr).List(context.TODO(), meta.ListOptions{})
+	gvrJobs := make([]gvrListJob, 0)
+	for _, apiGroup := range resourceList {
+		sort.Slice(apiGroup.APIResources, func(i int, j int) bool {
+			return apiGroup.APIResources[i].Name < apiGroup.APIResources[j].Name
+		})
+
+		for _, resource := range apiGroup.APIResources {
+			skipSlice := toSkip[apiGroup.GroupVersion]
+			if slices.Contains(skipSlice, resource.Name) {
+				continue
+			}
+
+			gvrJobs = append(gvrJobs, gvrListJob{
+				groupVersion: apiGroup.GroupVersion,
+				resourceName: resource.Name,
+				gvr: schema.GroupVersionResource{
+					Group:    getGroup(apiGroup.GroupVersion),
+					Version:  getVersion(apiGroup.GroupVersion),
+					Resource: resource.Name,
+				},
+				isNamespaced: resource.Namespaced,
+			})
+		}
+	}
+
+	writeJobs, events, writerDone, writerCount := startWriteWorkers(opts)
+	listJobs := make(chan gvrListJob, boundedWorkerCount(len(gvrJobs))*2)
+	listerWorkerCount := boundedWorkerCount(len(gvrJobs))
+	producerDone := make(chan struct{}, listerWorkerCount)
+
+	for range listerWorkerCount {
+		go func() {
+			defer func() {
+				producerDone <- struct{}{}
+			}()
+
+			for job := range listJobs {
+				err := enqueueGVRItems(client, job, opts, writeJobs)
+				if err != nil {
+					events <- processingEvent{
+						logMessage: fmt.Sprintf("Failed to process resource %q %s: %v", job.groupVersion, job.resourceName, err),
+					}
+				}
+			}
+		}()
+	}
+
+	go func() {
+		for _, job := range gvrJobs {
+			listJobs <- job
+		}
+		close(listJobs)
+	}()
+
+	closeEventsWhenDone(producerDone, listerWorkerCount, writerDone, writerCount, writeJobs, events)
+
+	return finalizeProcessing(events, opts)
+}
+
+func enqueueGVRItems(client dynamic.Interface, job gvrListJob, opts *options, writeJobs chan<- resourceWriteJob) error {
+	list, err := client.Resource(job.gvr).List(context.TODO(), meta.ListOptions{})
 	if err != nil {
-		return fileCount, fmt.Errorf("failed to list resources for %s: %w", gvr.Resource, err)
+		return fmt.Errorf("failed to list resources for %s: %w", job.gvr.Resource, err)
 	}
 
 	for i := range list.Items {
-		item := &list.Items[i]
-
-		if !shouldProcessItem(item, isNamespaced, options) {
+		item := list.Items[i]
+		if !shouldProcessItem(&item, job.isNamespaced, opts) {
 			continue
 		}
 
-		err := processUnstructured(item, isNamespaced, options)
-		if err != nil {
-			return fileCount, fmt.Errorf("failed to process item %s: %w", item.GetName(), err)
+		writeJobs <- resourceWriteJob{
+			item:         &item,
+			isNamespaced: job.isNamespaced,
+			sourceName:   fmt.Sprintf("%s %s", job.groupVersion, job.resourceName),
 		}
-
-		fileCount++
 	}
 
-	return fileCount, nil
+	return nil
 }
 
-func processUnstructured(item *unstructured.Unstructured, isNamespaced bool, opts *options) error {
+func startWriteWorkers(opts *options) (chan resourceWriteJob, chan processingEvent, chan struct{}, int) {
+	writerCount := defaultWorkerCount()
+	writeJobs := make(chan resourceWriteJob, writerCount*2)
+	events := make(chan processingEvent, writerCount*2)
+	writerDone := make(chan struct{}, writerCount)
+
+	for range writerCount {
+		go func() {
+			defer func() {
+				writerDone <- struct{}{}
+			}()
+
+			for job := range writeJobs {
+				filePath, err := processUnstructured(job.item, job.isNamespaced, opts)
+				if err != nil {
+					events <- processingEvent{
+						err: fmt.Errorf("failed to process item %s from %s: %w", job.item.GetName(), job.sourceName, err),
+					}
+					continue
+				}
+
+				events <- processingEvent{
+					writtenFile: filePath,
+				}
+			}
+		}()
+	}
+
+	return writeJobs, events, writerDone, writerCount
+}
+
+func closeEventsWhenDone(producerDone <-chan struct{}, producerCount int, writerDone <-chan struct{}, writerCount int, writeJobs chan resourceWriteJob, events chan processingEvent) {
+	go func() {
+		for range producerCount {
+			<-producerDone
+		}
+
+		close(writeJobs)
+
+		for range writerCount {
+			<-writerDone
+		}
+
+		close(events)
+	}()
+}
+
+func finalizeProcessing(events <-chan processingEvent, opts *options) error {
+	fileCount, err := consumeProcessingEvents(events, opts)
+	if err == nil && !opts.quiet {
+		fmt.Printf("Total files written: %d\n", fileCount)
+	}
+
+	return err
+}
+
+func consumeProcessingEvents(events <-chan processingEvent, opts *options) (int64, error) {
+	var (
+		fileCount int64
+		firstErr  error
+	)
+
+	for event := range events {
+		switch {
+		case event.err != nil:
+			if firstErr == nil {
+				firstErr = event.err
+			}
+		case event.logMessage != "":
+			fmt.Println(event.logMessage)
+		case event.writtenFile != "":
+			fileCount++
+			if !opts.quiet {
+				fmt.Printf("Written: %s\n", event.writtenFile)
+			}
+		}
+	}
+
+	return fileCount, firstErr
+}
+
+func defaultWorkerCount() int {
+	return boundedWorkerCount(runtime.GOMAXPROCS(0))
+}
+
+func boundedWorkerCount(jobCount int) int {
+	workerCount := runtime.GOMAXPROCS(0)
+	if workerCount < 2 {
+		workerCount = 2
+	}
+
+	if jobCount > 0 && workerCount > jobCount {
+		return jobCount
+	}
+
+	return workerCount
+}
+
+func processUnstructured(item *unstructured.Unstructured, isNamespaced bool, opts *options) (string, error) {
 	ns := item.GetNamespace()
 	if !isNamespaced {
 		ns = clusterNamespace
@@ -479,17 +646,17 @@ func processUnstructured(item *unstructured.Unstructured, isNamespaced bool, opt
 
 	err := os.MkdirAll(dirPath, 0o755)
 	if err != nil {
-		return fmt.Errorf("failed to create directory %s: %w", dirPath, err)
+		return "", fmt.Errorf("failed to create directory %s: %w", dirPath, err)
 	}
 
 	filePath := filepath.Join(dirPath, fmt.Sprintf("%s.yaml", sanitizePath(name)))
 
 	err = writeYAML(filePath, item.Object, opts)
 	if err != nil {
-		fmt.Printf("Failed to write YAML for %s: %v\n", filePath, err)
+		return "", err
 	}
 
-	return nil
+	return filePath, nil
 }
 
 func writeYAML(filePath string, obj map[string]any, opts *options) error {
@@ -523,10 +690,6 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 	err = encoder.Encode(obj)
 	if err != nil {
 		return fmt.Errorf("failed to write YAML to file %s: %w", filePath, err)
-	}
-
-	if !opts.quiet {
-		fmt.Printf("Written: %s\n", filePath)
 	}
 
 	return nil
