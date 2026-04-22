@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -33,6 +35,9 @@ const (
 	lastAppliedAnnotation  = "kubectl.kubernetes.io/last-applied-configuration"
 )
 
+//go:embed common-ignore-config.yaml
+var commonIgnoreConfig []byte
+
 var toSkip = map[string][]string{
 	"apps/v1": {"replicasets"},
 	"authentication.k8s.io/v1": {
@@ -49,17 +54,51 @@ var toSkip = map[string][]string{
 }
 
 type options struct {
-	outputDir         string
-	quiet             bool
-	dumpSecrets       bool
-	dumpManagedFields bool
-	removeOutdir      bool
-	fileName          string
-	namespacesCSV     string
-	nameRegex         string
-	namespaceFilter   map[string]struct{}
-	nameFilterEnabled bool
-	nameFilterRegex   *regexp.Regexp
+	outputDir             string
+	quiet                 bool
+	dumpSecrets           bool
+	dumpManagedFields     bool
+	removeOutdir          bool
+	ignoreConfigUseCommon bool
+	ignoreConfigFile      string
+	fileName              string
+	namespacesCSV         string
+	nameRegex             string
+	namespaceFilter       map[string]struct{}
+	nameFilterEnabled     bool
+	nameFilterRegex       *regexp.Regexp
+	ignoreRules           []ignoreRule
+}
+
+type ignoreConfig struct {
+	Rules []ignoreRuleFile `yaml:"rules"`
+}
+
+type ignoreRuleFile struct {
+	Group     *string  `yaml:"group"`
+	Kind      *string  `yaml:"kind"`
+	Namespace *string  `yaml:"namespace"`
+	Name      *string  `yaml:"name"`
+	Fields    []string `yaml:"fields"`
+}
+
+type ignoreRule struct {
+	GroupPattern     string
+	KindPattern      string
+	NamespacePattern string
+	NamePattern      string
+	Fields           []ignoreFieldPath
+}
+
+type ignoreFieldPath struct {
+	segments []string
+}
+
+type objectIdentity struct {
+	Group     string
+	Kind      string
+	Namespace string
+	Name      string
 }
 
 func main() {
@@ -84,6 +123,21 @@ func main() {
 		os.Exit(0)
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "show-common-ignore-config" {
+		if len(os.Args) > 2 {
+			fmt.Printf("show-common-ignore-config does not accept arguments: %v\n", os.Args[2:])
+			os.Exit(1)
+		}
+
+		err := writeCommonIgnoreConfig(os.Stdout)
+		if err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+
+		os.Exit(0)
+	}
+
 	err := mainWithError()
 	if err != nil {
 		fmt.Println(err)
@@ -98,12 +152,14 @@ func mainWithError() error {
 	pflag.BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
 	pflag.BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
 	pflag.BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
+	pflag.BoolVar(&opts.ignoreConfigUseCommon, "ignore-config-use-common", false, "Use the embedded common ignore config")
+	pflag.StringVar(&opts.ignoreConfigFile, "ignore-config", "", "Path to a YAML file with ignore rules")
 	pflag.StringVarP(&opts.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to dump")
 	pflag.StringVarP(&opts.nameRegex, "name-regex", "x", "", "Only dump resources where metadata.name matches this regex")
 	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "read --- sperated manifests from file (do not connect to api-server)")
 
 	pflag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s\nRead all resources from the api-server and dumps each resource to a file.\n", toolNameForUsageOutput)
+		fmt.Fprintf(os.Stderr, "Usage: %s\nRead all resources from the api-server and dumps each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n", toolNameForUsageOutput)
 		pflag.PrintDefaults()
 	}
 
@@ -128,6 +184,13 @@ func mainWithError() error {
 
 	opts.nameFilterEnabled = nameFilterEnabled
 	opts.nameFilterRegex = nameFilterRegex
+
+	ignoreRules, err := loadIgnoreRules(opts.ignoreConfigUseCommon, opts.ignoreConfigFile)
+	if err != nil {
+		return err
+	}
+
+	opts.ignoreRules = ignoreRules
 
 	if opts.removeOutdir {
 		err := os.RemoveAll(opts.outputDir)
@@ -345,6 +408,8 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 		redactSecretValues(obj)
 	}
 
+	applyIgnoreRules(obj, opts)
+
 	file, err := os.Create(filePath)
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", filePath, err)
@@ -366,6 +431,327 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 	}
 
 	return nil
+}
+
+func writeCommonIgnoreConfig(w io.Writer) error {
+	_, err := w.Write(commonIgnoreConfig)
+	if err != nil {
+		return fmt.Errorf("failed to write embedded common ignore config: %w", err)
+	}
+
+	return nil
+}
+
+func loadIgnoreRules(useCommon bool, userConfigFile string) ([]ignoreRule, error) {
+	trimmedFileName := strings.TrimSpace(userConfigFile)
+	rules := make([]ignoreRule, 0)
+
+	if useCommon {
+		commonRules, err := parseIgnoreConfigBytes("embedded common ignore config", commonIgnoreConfig)
+		if err != nil {
+			return nil, err
+		}
+
+		rules = append(rules, commonRules...)
+	}
+
+	if trimmedFileName == "" {
+		return rules, nil
+	}
+
+	userConfigBytes, err := os.ReadFile(trimmedFileName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read ignore config %s: %w", trimmedFileName, err)
+	}
+
+	userRules, err := parseIgnoreConfigBytes(trimmedFileName, userConfigBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return append(rules, userRules...), nil
+}
+
+func parseIgnoreConfigBytes(name string, data []byte) ([]ignoreRule, error) {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+
+	var cfg ignoreConfig
+	if err := decoder.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse ignore config %s: %w", name, err)
+	}
+
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, fmt.Errorf("failed to parse ignore config %s: expected a single YAML document", name)
+		}
+
+		return nil, fmt.Errorf("failed to parse ignore config %s: %w", name, err)
+	}
+
+	rules := make([]ignoreRule, 0, len(cfg.Rules))
+	for idx := range cfg.Rules {
+		rule, err := compileIgnoreRule(cfg.Rules[idx])
+		if err != nil {
+			return nil, fmt.Errorf("invalid ignore rule %d in %s: %w", idx+1, name, err)
+		}
+
+		rules = append(rules, rule)
+	}
+
+	return rules, nil
+}
+
+func compileIgnoreRule(fileRule ignoreRuleFile) (ignoreRule, error) {
+	fields := make([]ignoreFieldPath, 0, len(fileRule.Fields))
+	for _, field := range fileRule.Fields {
+		trimmed := strings.TrimSpace(field)
+		if trimmed == "" {
+			return ignoreRule{}, fmt.Errorf("fields must not contain empty entries")
+		}
+
+		segments, err := parseIgnoreFieldPath(trimmed)
+		if err != nil {
+			return ignoreRule{}, fmt.Errorf("invalid field path %q: %w", trimmed, err)
+		}
+
+		fields = append(fields, ignoreFieldPath{
+			segments: segments,
+		})
+	}
+
+	if len(fields) == 0 {
+		return ignoreRule{}, fmt.Errorf("fields must not be empty")
+	}
+
+	groupPattern := patternOrWildcard(fileRule.Group)
+	if err := validateGlobPattern(groupPattern); err != nil {
+		return ignoreRule{}, fmt.Errorf("invalid group glob %q: %w", groupPattern, err)
+	}
+
+	kindPattern := patternOrWildcard(fileRule.Kind)
+	if err := validateGlobPattern(kindPattern); err != nil {
+		return ignoreRule{}, fmt.Errorf("invalid kind glob %q: %w", kindPattern, err)
+	}
+
+	namespacePattern := patternOrWildcard(fileRule.Namespace)
+	if err := validateGlobPattern(namespacePattern); err != nil {
+		return ignoreRule{}, fmt.Errorf("invalid namespace glob %q: %w", namespacePattern, err)
+	}
+
+	namePattern := patternOrWildcard(fileRule.Name)
+	if err := validateGlobPattern(namePattern); err != nil {
+		return ignoreRule{}, fmt.Errorf("invalid name glob %q: %w", namePattern, err)
+	}
+
+	return ignoreRule{
+		GroupPattern:     groupPattern,
+		KindPattern:      kindPattern,
+		NamespacePattern: namespacePattern,
+		NamePattern:      namePattern,
+		Fields:           fields,
+	}, nil
+}
+
+func patternOrWildcard(value *string) string {
+	if value == nil {
+		return "*"
+	}
+
+	return strings.TrimSpace(*value)
+}
+
+func validateGlobPattern(pattern string) error {
+	_, err := path.Match(pattern, "")
+	return err
+}
+
+func parseIgnoreFieldPath(fieldPath string) ([]string, error) {
+	var segments []string
+	var current strings.Builder
+	escaped := false
+
+	for i := 0; i < len(fieldPath); i++ {
+		r := fieldPath[i]
+
+		switch {
+		case escaped:
+			current.WriteByte(r)
+			escaped = false
+		case r == '\\':
+			escaped = true
+		case fieldPath[i:] == "..." || strings.HasPrefix(fieldPath[i:], "..."):
+			if current.Len() > 0 {
+				segments = append(segments, current.String())
+				current.Reset()
+			}
+
+			segments = append(segments, "...")
+			i += 2
+		case r == '.':
+			if current.Len() == 0 {
+				return nil, fmt.Errorf("empty path segment")
+			}
+
+			segments = append(segments, current.String())
+			current.Reset()
+		default:
+			current.WriteByte(r)
+		}
+	}
+
+	if escaped {
+		return nil, fmt.Errorf("path ends with an unfinished escape")
+	}
+
+	if current.Len() == 0 {
+		if len(segments) > 0 && segments[len(segments)-1] == "..." {
+			return nil, fmt.Errorf("path must not end with ...")
+		}
+
+		return nil, fmt.Errorf("empty path segment")
+	}
+
+	segments = append(segments, current.String())
+
+	return segments, nil
+}
+
+func applyIgnoreRules(obj map[string]any, opts *options) {
+	if len(opts.ignoreRules) == 0 {
+		return
+	}
+
+	identity := objectIdentityFromObject(obj)
+	for _, rule := range opts.ignoreRules {
+		if !rule.matches(identity) {
+			continue
+		}
+
+		for _, field := range rule.Fields {
+			if opts.dumpManagedFields && isManagedFieldsPath(field.segments) {
+				continue
+			}
+
+			deleteFieldPath(obj, field.segments)
+		}
+	}
+}
+
+func objectIdentityFromObject(obj map[string]any) objectIdentity {
+	u := &unstructured.Unstructured{Object: obj}
+	namespace := u.GetNamespace()
+	if namespace == "" {
+		namespace = clusterNamespace
+	}
+
+	return objectIdentity{
+		Group:     getGroup(u.GetAPIVersion()),
+		Kind:      u.GetKind(),
+		Namespace: namespace,
+		Name:      u.GetName(),
+	}
+}
+
+func (r ignoreRule) matches(identity objectIdentity) bool {
+	return matchGlob(r.GroupPattern, identity.Group) &&
+		matchGlob(r.KindPattern, identity.Kind) &&
+		matchGlob(r.NamespacePattern, identity.Namespace) &&
+		matchGlob(r.NamePattern, identity.Name)
+}
+
+func matchGlob(pattern string, value string) bool {
+	matched, err := path.Match(pattern, value)
+	if err != nil {
+		return false
+	}
+
+	return matched
+}
+
+func isManagedFieldsPath(segments []string) bool {
+	return len(segments) == 2 && segments[0] == "metadata" && segments[1] == "managedFields"
+}
+
+func deleteFieldPath(current any, segments []string) {
+	if len(segments) == 0 {
+		return
+	}
+
+	if segments[0] == "..." {
+		deleteFieldPathRecursive(current, segments[1:])
+		return
+	}
+
+	switch typed := current.(type) {
+	case map[string]any:
+		deleteFieldPathFromMap(typed, segments)
+	case map[string]string:
+		deleteFieldPathFromStringMap(typed, segments)
+	case []any:
+		for _, entry := range typed {
+			deleteFieldPath(entry, segments)
+		}
+	case []map[string]any:
+		for _, entry := range typed {
+			deleteFieldPath(entry, segments)
+		}
+	case []map[string]string:
+		for _, entry := range typed {
+			deleteFieldPath(entry, segments)
+		}
+	}
+}
+
+func deleteFieldPathRecursive(current any, remaining []string) {
+	if len(remaining) == 0 {
+		return
+	}
+
+	deleteFieldPath(current, remaining)
+
+	switch typed := current.(type) {
+	case map[string]any:
+		for _, value := range typed {
+			deleteFieldPathRecursive(value, remaining)
+		}
+	case []any:
+		for _, entry := range typed {
+			deleteFieldPathRecursive(entry, remaining)
+		}
+	case []map[string]any:
+		for _, entry := range typed {
+			deleteFieldPathRecursive(entry, remaining)
+		}
+	case []map[string]string:
+		for _, entry := range typed {
+			deleteFieldPathRecursive(entry, remaining)
+		}
+	}
+}
+
+func deleteFieldPathFromMap(current map[string]any, segments []string) {
+	key := segments[0]
+	if len(segments) == 1 {
+		delete(current, key)
+		return
+	}
+
+	next, ok := current[key]
+	if !ok {
+		return
+	}
+
+	deleteFieldPath(next, segments[1:])
+}
+
+func deleteFieldPathFromStringMap(current map[string]string, segments []string) {
+	if len(segments) != 1 {
+		return
+	}
+
+	delete(current, segments[0])
 }
 
 func getGroup(groupVersion string) string {

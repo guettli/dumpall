@@ -18,6 +18,36 @@ To dump only specific namespaces, use `--namespaces` (or `-n`) with a comma-sepa
 
 To dump only resources whose `metadata.name` matches a regex, use `--name-regex` (or `-x`), for example `--name-regex '^kube-apiserver-.*'`.
 
+Ignore rules are optional and off by default. There are three modes:
+
+1. No ignore flag: output behaves like before, with no ignore rules applied.
+2. `--ignore-config-use-common`: use the embedded common ignore config to reduce diff noise from server-managed fields.
+3. `--ignore-config rules.yaml`: use only the rules from your YAML file.
+4. `--ignore-config-use-common --ignore-config rules.yaml`: use the union of embedded common rules and your YAML rules.
+
+Use `dumpall show-common-ignore-config` to print the embedded YAML config exactly as stored in the binary, including comments.
+
+The YAML schema is parsed in strict mode, so unknown fields fail fast.
+
+Example:
+
+```yaml
+rules:
+  - group: apps
+    kind: Deployment
+    namespace: prod-*
+    name: api-*
+    fields:
+      - status
+      - metadata.annotations.example\.com/build-id
+  - kind: Namespace
+    name: org-*
+    fields:
+      - metadata...kubernetes\.io/metadata\.name
+```
+
+Rules match by `group`, `kind`, `namespace`, and `name` using globbing. If one of these matchers is omitted, it behaves like `*`. Cluster-scoped resources use the namespace `_cluster` for matching. Fields use dot notation, literal dots in map keys must be escaped as `\.`. The token `...` means recursive descent across zero or more nested levels, and paths automatically walk lists, so `webhooks.clientConfig.caBundle` removes `caBundle` from every webhook entry.
+
 ## Via `go run`
 
 The easiest way is to run the code like this:

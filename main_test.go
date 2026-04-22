@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -282,6 +283,297 @@ func TestShouldProcessItem_NameRegexAndNamespaceFilter(t *testing.T) {
 	}
 }
 
+func TestParseIgnoreConfigBytes_StrictUnknownField(t *testing.T) {
+	t.Parallel()
+
+	_, err := parseIgnoreConfigBytes("test", []byte(`
+rules:
+  - kind: ConfigMap
+    unexpected: true
+    fields:
+      - status
+`))
+	if err == nil {
+		t.Fatalf("expected strict parsing error, got nil")
+	}
+}
+
+func TestParseIgnoreConfigBytes_MissingMatchersBecomeWildcard(t *testing.T) {
+	t.Parallel()
+
+	rules, err := parseIgnoreConfigBytes("test", []byte(`
+rules:
+  - fields:
+      - status
+  - group: ""
+    kind: Namespace
+    fields:
+      - spec.finalizers
+`))
+	if err != nil {
+		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+	}
+
+	if len(rules) != 2 {
+		t.Fatalf("expected 2 rules, got %d", len(rules))
+	}
+
+	if rules[0].GroupPattern != "*" || rules[0].KindPattern != "*" || rules[0].NamespacePattern != "*" || rules[0].NamePattern != "*" {
+		t.Fatalf("expected missing matchers to default to *, got %+v", rules[0])
+	}
+
+	if rules[1].GroupPattern != "" {
+		t.Fatalf("expected explicit empty group pattern to stay empty, got %q", rules[1].GroupPattern)
+	}
+}
+
+func TestApplyIgnoreRules_GlobsEscapesAndLists(t *testing.T) {
+	t.Parallel()
+
+	rules, err := parseIgnoreConfigBytes("test", []byte(`
+rules:
+  - group: admissionregistration.k8s.io
+    kind: "*WebhookConfiguration"
+    name: capi-*
+    fields:
+      - metadata...kubectl\.kubernetes\.io/last-applied-configuration
+      - webhooks...caBundle
+      - webhooks...scope
+`))
+	if err != nil {
+		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+	}
+
+	obj := webhookObject()
+	opts := &options{ignoreRules: rules}
+
+	applyIgnoreRules(obj, opts)
+
+	metadata := obj["metadata"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]any)
+	if _, ok := annotations[lastAppliedAnnotation]; ok {
+		t.Fatalf("expected last-applied annotation to be removed")
+	}
+
+	webhooks := obj["webhooks"].([]any)
+	webhook := webhooks[0].(map[string]any)
+	clientConfig := webhook["clientConfig"].(map[string]any)
+	if _, ok := clientConfig["caBundle"]; ok {
+		t.Fatalf("expected caBundle to be removed")
+	}
+
+	rulesList := webhook["rules"].([]any)
+	rule := rulesList[0].(map[string]any)
+	if _, ok := rule["scope"]; ok {
+		t.Fatalf("expected scope to be removed from each webhook rule")
+	}
+}
+
+func TestWriteYAML_NoIgnoreRulesByDefault(t *testing.T) {
+	t.Parallel()
+
+	outFile := filepath.Join(t.TempDir(), "webhook.yaml")
+	opts := &options{
+		quiet:       true,
+		ignoreRules: nil,
+	}
+
+	err := writeYAML(outFile, webhookObject(), opts)
+	if err != nil {
+		t.Fatalf("writeYAML returned error: %v", err)
+	}
+
+	contentBytes, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+
+	content := string(contentBytes)
+
+	for _, expected := range []string{
+		"creationTimestamp:",
+		"resourceVersion:",
+		"uid:",
+		"clusterctl.cluster.x-k8s.io",
+		lastAppliedAnnotation,
+		"caBundle:",
+		"matchPolicy:",
+		"namespaceSelector:",
+		"objectSelector:",
+		"reinvocationPolicy:",
+		"timeoutSeconds:",
+		"scope:",
+		"status:",
+	} {
+		if !strings.Contains(content, expected) {
+			t.Fatalf("expected output to contain %q, got:\n%s", expected, content)
+		}
+	}
+}
+
+func TestWriteYAML_CommonIgnoreConfigApplied(t *testing.T) {
+	t.Parallel()
+
+	rules, err := loadIgnoreRules(true, "")
+	if err != nil {
+		t.Fatalf("loadIgnoreRules returned error: %v", err)
+	}
+
+	outFile := filepath.Join(t.TempDir(), "webhook.yaml")
+	opts := &options{
+		quiet:       true,
+		ignoreRules: rules,
+	}
+
+	err = writeYAML(outFile, webhookObject(), opts)
+	if err != nil {
+		t.Fatalf("writeYAML returned error: %v", err)
+	}
+
+	contentBytes, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+
+	content := string(contentBytes)
+
+	for _, unwanted := range []string{
+		"creationTimestamp:",
+		"resourceVersion:",
+		"uid:",
+		"clusterctl.cluster.x-k8s.io",
+		lastAppliedAnnotation,
+		"caBundle:",
+		"matchPolicy:",
+		"namespaceSelector:",
+		"objectSelector:",
+		"reinvocationPolicy:",
+		"timeoutSeconds:",
+		"scope:",
+		"status:",
+	} {
+		if strings.Contains(content, unwanted) {
+			t.Fatalf("expected output to not contain %q, got:\n%s", unwanted, content)
+		}
+	}
+}
+
+func TestWriteYAML_DumpManagedFieldsOverridesCommonIgnore(t *testing.T) {
+	t.Parallel()
+
+	rules, err := loadIgnoreRules(true, "")
+	if err != nil {
+		t.Fatalf("loadIgnoreRules returned error: %v", err)
+	}
+
+	obj := webhookObject()
+	obj["metadata"].(map[string]any)["managedFields"] = []any{
+		map[string]any{"manager": "kubectl"},
+	}
+
+	outFile := filepath.Join(t.TempDir(), "webhook.yaml")
+	opts := &options{
+		quiet:             true,
+		dumpManagedFields: true,
+		ignoreRules:       rules,
+	}
+
+	err = writeYAML(outFile, obj, opts)
+	if err != nil {
+		t.Fatalf("writeYAML returned error: %v", err)
+	}
+
+	contentBytes, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+
+	content := string(contentBytes)
+	if !strings.Contains(content, "managedFields:") {
+		t.Fatalf("expected managedFields to remain when dumpManagedFields=true, got:\n%s", content)
+	}
+}
+
+func TestLoadIgnoreRules_DefaultIsEmpty(t *testing.T) {
+	t.Parallel()
+
+	rules, err := loadIgnoreRules(false, "")
+	if err != nil {
+		t.Fatalf("loadIgnoreRules returned error: %v", err)
+	}
+
+	if len(rules) != 0 {
+		t.Fatalf("expected no default ignore rules, got %d", len(rules))
+	}
+}
+
+func TestLoadIgnoreRules_UserFileOnly(t *testing.T) {
+	t.Parallel()
+
+	configFile := filepath.Join(t.TempDir(), "ignore.yaml")
+	err := os.WriteFile(configFile, []byte(`
+rules:
+  - kind: ConfigMap
+    fields:
+      - status
+`), 0o600)
+	if err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	rules, err := loadIgnoreRules(false, configFile)
+	if err != nil {
+		t.Fatalf("loadIgnoreRules returned error: %v", err)
+	}
+
+	if len(rules) != 1 {
+		t.Fatalf("expected 1 user rule, got %d", len(rules))
+	}
+}
+
+func TestLoadIgnoreRules_CommonAndUserFileAreCombined(t *testing.T) {
+	t.Parallel()
+
+	configFile := filepath.Join(t.TempDir(), "ignore.yaml")
+	err := os.WriteFile(configFile, []byte(`
+rules:
+  - kind: ConfigMap
+    fields:
+      - status
+`), 0o600)
+	if err != nil {
+		t.Fatalf("write config file: %v", err)
+	}
+
+	commonRules, err := loadIgnoreRules(true, "")
+	if err != nil {
+		t.Fatalf("loadIgnoreRules common returned error: %v", err)
+	}
+
+	rules, err := loadIgnoreRules(true, configFile)
+	if err != nil {
+		t.Fatalf("loadIgnoreRules combined returned error: %v", err)
+	}
+
+	if len(rules) != len(commonRules)+1 {
+		t.Fatalf("expected %d combined rules, got %d", len(commonRules)+1, len(rules))
+	}
+}
+
+func TestWriteCommonIgnoreConfig_PrintsEmbeddedYamlVerbatim(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	err := writeCommonIgnoreConfig(&buf)
+	if err != nil {
+		t.Fatalf("writeCommonIgnoreConfig returned error: %v", err)
+	}
+
+	if buf.String() != string(commonIgnoreConfig) {
+		t.Fatalf("expected verbatim common ignore config output")
+	}
+}
+
 func newObject(kind string, name string, namespace string) *unstructured.Unstructured {
 	metadata := map[string]any{
 		"name": name,
@@ -298,4 +590,46 @@ func newObject(kind string, name string, namespace string) *unstructured.Unstruc
 	}
 
 	return &unstructured.Unstructured{Object: obj}
+}
+
+func webhookObject() map[string]any {
+	return map[string]any{
+		"apiVersion": "admissionregistration.k8s.io/v1",
+		"kind":       "MutatingWebhookConfiguration",
+		"metadata": map[string]any{
+			"name":              "capi-mutating-webhook-configuration",
+			"creationTimestamp": "2026-04-22T00:00:00Z",
+			"generation":        int64(2),
+			"resourceVersion":   "123",
+			"uid":               "uid-1",
+			"annotations": map[string]any{
+				"clusterctl.cluster.x-k8s.io": "",
+				lastAppliedAnnotation:         "present",
+			},
+		},
+		"webhooks": []any{
+			map[string]any{
+				"clientConfig": map[string]any{
+					"caBundle": "bundle",
+					"service": map[string]any{
+						"name": "webhook-service",
+						"port": int64(443),
+					},
+				},
+				"matchPolicy":        "Equivalent",
+				"namespaceSelector":  map[string]any{},
+				"objectSelector":     map[string]any{},
+				"reinvocationPolicy": "Never",
+				"rules": []any{
+					map[string]any{
+						"scope": "*",
+					},
+				},
+				"timeoutSeconds": int64(10),
+			},
+		},
+		"status": map[string]any{
+			"observedGeneration": int64(2),
+		},
+	}
 }
