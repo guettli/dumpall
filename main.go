@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -62,6 +63,7 @@ type options struct {
 	ignoreConfigUseCommon bool
 	ignoreConfigFile      string
 	fileName              string
+	inputDir              string
 	namespacesCSV         string
 	nameRegex             string
 	namespaceFilter       map[string]struct{}
@@ -156,10 +158,11 @@ func mainWithError() error {
 	pflag.StringVar(&opts.ignoreConfigFile, "ignore-config", "", "Path to a YAML file with ignore rules")
 	pflag.StringVarP(&opts.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to dump")
 	pflag.StringVarP(&opts.nameRegex, "name-regex", "x", "", "Only dump resources where metadata.name matches this regex")
-	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "read --- sperated manifests from file (do not connect to api-server)")
+	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "Read YAML manifests from file (do not connect to api-server)")
+	pflag.StringVarP(&opts.inputDir, "dir", "d", "", "Read YAML manifests recursively from directory (do not connect to api-server)")
 
 	pflag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s\nRead all resources from the api-server and dumps each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n", toolNameForUsageOutput)
+		fmt.Fprintf(os.Stderr, "Usage: %s\nRead resources from the api-server, a YAML file, or a YAML directory tree and dump each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n", toolNameForUsageOutput)
 		pflag.PrintDefaults()
 	}
 
@@ -184,6 +187,14 @@ func mainWithError() error {
 
 	opts.nameFilterEnabled = nameFilterEnabled
 	opts.nameFilterRegex = nameFilterRegex
+
+	opts.fileName = strings.TrimSpace(opts.fileName)
+	opts.inputDir = strings.TrimSpace(opts.inputDir)
+
+	err = validateInputSources(opts.fileName, opts.inputDir)
+	if err != nil {
+		return err
+	}
 
 	ignoreRules, err := loadIgnoreRules(opts.ignoreConfigUseCommon, opts.ignoreConfigFile)
 	if err != nil {
@@ -210,6 +221,10 @@ func mainWithError() error {
 
 	if opts.fileName != "" {
 		return readYamlFromFile(opts.fileName, opts)
+	}
+
+	if opts.inputDir != "" {
+		return readYamlFromDir(opts.inputDir, opts)
 	}
 
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
@@ -282,38 +297,125 @@ func mainWithError() error {
 	return nil
 }
 
-func readYamlFromFile(fileName string, opts *options) error {
-	fileCount := int64(0)
-
-	f, err := os.Open(fileName)
-	if err != nil {
-		return fmt.Errorf("failed to open file %s: %w", fileName, err)
+func validateInputSources(fileName string, inputDir string) error {
+	if fileName != "" && inputDir != "" {
+		return fmt.Errorf("--file-name and --dir are mutually exclusive")
 	}
-	defer f.Close()
 
-	bytes, err := io.ReadAll(f)
+	return nil
+}
+
+func readYamlFromFile(fileName string, opts *options) error {
+	bytes, err := os.ReadFile(fileName)
 	if err != nil {
 		return fmt.Errorf("failed to read file %s: %w", fileName, err)
 	}
 
-	nodes, err := kio.FromBytes(bytes)
+	fileCount, err := processYAMLBytes(bytes, fileName, opts)
 	if err != nil {
-		return fmt.Errorf("failed to parse YAML: %w", err)
+		return err
 	}
 
+	if !opts.quiet {
+		fmt.Printf("Total files written: %d\n", fileCount)
+	}
+
+	return nil
+}
+
+func readYamlFromDir(dirPath string, opts *options) error {
+	yamlFiles, err := findYAMLFiles(dirPath)
+	if err != nil {
+		return err
+	}
+
+	fileCount := int64(0)
+	for _, filePath := range yamlFiles {
+		bytes, err := os.ReadFile(filePath)
+		if err != nil {
+			return fmt.Errorf("failed to read file %s: %w", filePath, err)
+		}
+
+		written, err := processYAMLBytes(bytes, filePath, opts)
+		if err != nil {
+			return err
+		}
+
+		fileCount += written
+	}
+
+	if !opts.quiet {
+		fmt.Printf("Total files written: %d\n", fileCount)
+	}
+
+	return nil
+}
+
+func findYAMLFiles(dirPath string) ([]string, error) {
+	info, err := os.Stat(dirPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect directory %s: %w", dirPath, err)
+	}
+
+	if !info.IsDir() {
+		return nil, fmt.Errorf("input path %q is not a directory", dirPath)
+	}
+
+	yamlFiles := make([]string, 0)
+	err = filepath.WalkDir(dirPath, func(currentPath string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		if d.IsDir() {
+			return nil
+		}
+
+		if !isYAMLFile(currentPath) {
+			return nil
+		}
+
+		yamlFiles = append(yamlFiles, currentPath)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to walk directory %s: %w", dirPath, err)
+	}
+
+	sort.Strings(yamlFiles)
+
+	return yamlFiles, nil
+}
+
+func isYAMLFile(filePath string) bool {
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".yaml", ".yml":
+		return true
+	default:
+		return false
+	}
+}
+
+func processYAMLBytes(bytes []byte, sourceName string, opts *options) (int64, error) {
+	nodes, err := kio.FromBytes(bytes)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse YAML in %s: %w", sourceName, err)
+	}
+
+	fileCount := int64(0)
 	for i := range nodes {
 		node := nodes[i]
 
 		m, err := node.Map()
 		if err != nil {
-			return fmt.Errorf("failed to convert node to map: %w", err)
+			return 0, fmt.Errorf("failed to convert document %d in %s to map: %w", i+1, sourceName, err)
 		}
 
 		u := &unstructured.Unstructured{Object: m}
 
 		ns, _, err := unstructured.NestedString(m, "metadata", "namespace")
 		if err != nil {
-			return fmt.Errorf("failed to get namespace for item %s: %w", u.GetName(), err)
+			return 0, fmt.Errorf("failed to get namespace for item %s in %s: %w", u.GetName(), sourceName, err)
 		}
 
 		isNamespaced := ns != ""
@@ -324,17 +426,13 @@ func readYamlFromFile(fileName string, opts *options) error {
 
 		err = processUnstructured(u, isNamespaced, opts)
 		if err != nil {
-			return fmt.Errorf("failed to process item %s: %w", u.GetName(), err)
+			return 0, fmt.Errorf("failed to process item %s from %s: %w", u.GetName(), sourceName, err)
 		}
 
 		fileCount++
 	}
 
-	if !opts.quiet {
-		fmt.Printf("Total files written: %d\n", fileCount)
-	}
-
-	return nil
+	return fileCount, nil
 }
 
 func processGVR(client dynamic.Interface, gvr schema.GroupVersionResource, isNamespaced bool, options *options) (count int64, err error) {

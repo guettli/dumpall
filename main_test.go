@@ -247,6 +247,102 @@ func TestParseNameFilterRegex_Empty(t *testing.T) {
 	}
 }
 
+func TestValidateInputSources_MutuallyExclusive(t *testing.T) {
+	t.Parallel()
+
+	err := validateInputSources("input.yaml", "manifests")
+	if err == nil {
+		t.Fatalf("expected error when --file-name and --dir are both set")
+	}
+}
+
+func TestReadYamlFromDir_RecursiveAndAppliesIgnoreRules(t *testing.T) {
+	t.Parallel()
+
+	inputDir := filepath.Join(t.TempDir(), "input")
+	err := os.MkdirAll(filepath.Join(inputDir, "nested"), 0o755)
+	if err != nil {
+		t.Fatalf("create input dir: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(inputDir, "configmap.yaml"), []byte(`
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cfg
+  namespace: alpha
+  ownerReferences:
+    - apiVersion: v1
+      kind: Namespace
+      name: alpha
+      uid: owner-1
+data:
+  key: value
+status:
+  phase: Active
+`), 0o600)
+	if err != nil {
+		t.Fatalf("write configmap manifest: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(inputDir, "nested", "namespace.yml"), []byte(`
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: alpha
+`), 0o600)
+	if err != nil {
+		t.Fatalf("write namespace manifest: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(inputDir, "nested", "notes.txt"), []byte("ignored"), 0o600)
+	if err != nil {
+		t.Fatalf("write ignored file: %v", err)
+	}
+
+	rules, err := parseIgnoreConfigBytes("test", []byte(`
+rules:
+  - fields:
+      - metadata.ownerReferences
+      - status
+`))
+	if err != nil {
+		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+	}
+
+	outputDir := filepath.Join(t.TempDir(), "out")
+	opts := &options{
+		outputDir:   outputDir,
+		quiet:       true,
+		ignoreRules: rules,
+	}
+
+	err = readYamlFromDir(inputDir, opts)
+	if err != nil {
+		t.Fatalf("readYamlFromDir returned error: %v", err)
+	}
+
+	configMapOut := filepath.Join(outputDir, "alpha", "ConfigMap", "cfg.yaml")
+	configMapBytes, err := os.ReadFile(configMapOut)
+	if err != nil {
+		t.Fatalf("read configmap output: %v", err)
+	}
+
+	configMapContent := string(configMapBytes)
+	if strings.Contains(configMapContent, "ownerReferences:") {
+		t.Fatalf("expected ownerReferences to be pruned, got:\n%s", configMapContent)
+	}
+
+	if strings.Contains(configMapContent, "status:") {
+		t.Fatalf("expected status to be pruned, got:\n%s", configMapContent)
+	}
+
+	namespaceOut := filepath.Join(outputDir, clusterNamespace, "Namespace", "alpha.yaml")
+	if _, err := os.Stat(namespaceOut); err != nil {
+		t.Fatalf("expected namespace output file, got error: %v", err)
+	}
+}
+
 func TestShouldProcessItem(t *testing.T) {
 	t.Parallel()
 
