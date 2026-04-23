@@ -839,6 +839,16 @@ func compileIgnoreRule(fileRule ignoreRuleFile) (ignoreRule, error) {
 			return ignoreRule{}, fmt.Errorf("invalid field path %q: %w", trimmed, err)
 		}
 
+		for _, segment := range segments {
+			if segment == "..." || !hasFieldSegmentWildcard(segment) {
+				continue
+			}
+
+			if err := validateGlobPattern(segment); err != nil {
+				return ignoreRule{}, fmt.Errorf("invalid field path %q: invalid segment glob %q: %w", trimmed, segment, err)
+			}
+		}
+
 		fields = append(fields, ignoreFieldPath{
 			segments: segments,
 		})
@@ -1055,18 +1065,34 @@ func deleteFieldPathRecursive(current any, remaining []string) {
 }
 
 func deleteFieldPathFromMap(current map[string]any, segments []string) {
-	key := segments[0]
-	if len(segments) == 1 {
-		delete(current, key)
+	keyPattern := segments[0]
+	if !hasFieldSegmentWildcard(keyPattern) {
+		if len(segments) == 1 {
+			delete(current, keyPattern)
+			return
+		}
+
+		next, ok := current[keyPattern]
+		if !ok {
+			return
+		}
+
+		deleteFieldPath(next, segments[1:])
 		return
 	}
 
-	next, ok := current[key]
-	if !ok {
-		return
-	}
+	for key, next := range current {
+		if !matchGlob(keyPattern, key) {
+			continue
+		}
 
-	deleteFieldPath(next, segments[1:])
+		if len(segments) == 1 {
+			delete(current, key)
+			continue
+		}
+
+		deleteFieldPath(next, segments[1:])
+	}
 }
 
 func deleteFieldPathFromStringMap(current map[string]string, segments []string) {
@@ -1074,7 +1100,21 @@ func deleteFieldPathFromStringMap(current map[string]string, segments []string) 
 		return
 	}
 
-	delete(current, segments[0])
+	keyPattern := segments[0]
+	if !hasFieldSegmentWildcard(keyPattern) {
+		delete(current, keyPattern)
+		return
+	}
+
+	for key := range current {
+		if matchGlob(keyPattern, key) {
+			delete(current, key)
+		}
+	}
+}
+
+func hasFieldSegmentWildcard(segment string) bool {
+	return strings.ContainsAny(segment, "*?")
 }
 
 func getGroup(groupVersion string) string {

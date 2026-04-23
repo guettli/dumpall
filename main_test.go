@@ -535,6 +535,48 @@ rules:
 	}
 }
 
+func TestApplyIgnoreRules_FieldSegmentGlobMatchesMapKeys(t *testing.T) {
+	t.Parallel()
+
+	rules, err := parseIgnoreConfigBytes("test", []byte(`
+rules:
+  - fields:
+      - metadata.labels.kapp\.k14s\.io/*
+`))
+	if err != nil {
+		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+	}
+
+	obj := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":      "demo",
+			"namespace": "default",
+			"labels": map[string]any{
+				"app":                      "keep",
+				"kapp.k14s.io/app":         "remove",
+				"kapp.k14s.io/association": "remove",
+			},
+		},
+	}
+
+	applyIgnoreRules(obj, &options{ignoreRules: rules})
+
+	labels := obj["metadata"].(map[string]any)["labels"].(map[string]any)
+	if _, ok := labels["kapp.k14s.io/app"]; ok {
+		t.Fatalf("expected kapp.k14s.io/app label to be removed")
+	}
+
+	if _, ok := labels["kapp.k14s.io/association"]; ok {
+		t.Fatalf("expected kapp.k14s.io/association label to be removed")
+	}
+
+	if labels["app"] != "keep" {
+		t.Fatalf("expected non-matching label to remain, got %#v", labels["app"])
+	}
+}
+
 func TestWriteYAML_NoIgnoreRulesByDefault(t *testing.T) {
 	t.Parallel()
 

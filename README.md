@@ -48,7 +48,7 @@ rules:
       - metadata...kubernetes\.io/metadata\.name
 ```
 
-Rules match by `group`, `kind`, `namespace`, and `name` using globbing. If one of these matchers is omitted, it behaves like `*`. Cluster-scoped resources use the namespace `_cluster` for matching. Fields use dot notation, literal dots in map keys must be escaped as `\.`. The token `...` means recursive descent across zero or more nested levels, and paths automatically walk lists, so `webhooks.clientConfig.caBundle` removes `caBundle` from every webhook entry.
+Rules match by `group`, `kind`, `namespace`, and `name` using globbing. If one of these matchers is omitted, it behaves like `*`. Cluster-scoped resources use the namespace `_cluster` for matching. Fields use dot notation, literal dots in map keys must be escaped as `\.` and individual path segments can use `*` or `?` glob wildcards, for example `metadata.labels.kapp\.k14s\.io/*`. The token `...` means recursive descent across zero or more nested levels, and paths automatically walk lists, so `webhooks.clientConfig.caBundle` removes `caBundle` from every webhook entry.
 
 ## Via `go run`
 
