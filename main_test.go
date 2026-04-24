@@ -106,15 +106,13 @@ func TestWriteYAML_PrunesEmptyAnnotationsAfterRedaction(t *testing.T) {
 	}
 }
 
-func TestPruneEmptyMaps_RemovesNestedMapFieldsAndListEntries(t *testing.T) {
+func TestPruneEmptyMetadataMaps_RemovesOnlyAnnotationsAndLabels(t *testing.T) {
 	t.Parallel()
 
 	obj := map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]any{},
-			"labels": map[string]any{
-				"app": "demo",
-			},
+			"labels":      map[string]any{},
 		},
 		"webhooks": []any{
 			map[string]any{
@@ -129,22 +127,26 @@ func TestPruneEmptyMaps_RemovesNestedMapFieldsAndListEntries(t *testing.T) {
 		},
 	}
 
-	pruneEmptyMaps(obj)
+	pruneEmptyMetadataMaps(obj)
 
 	metadata := obj["metadata"].(map[string]any)
 	if _, ok := metadata["annotations"]; ok {
 		t.Fatalf("expected empty annotations map to be pruned")
 	}
 
+	if _, ok := metadata["labels"]; ok {
+		t.Fatalf("expected empty labels map to be pruned")
+	}
+
 	webhooks := obj["webhooks"].([]any)
 	webhook := webhooks[0].(map[string]any)
-	if _, ok := webhook["namespaceSelector"]; ok {
-		t.Fatalf("expected empty namespaceSelector map to be pruned")
+	if _, ok := webhook["namespaceSelector"]; !ok {
+		t.Fatalf("expected empty namespaceSelector map to be preserved; schema-blind pruning is unsafe because empty maps can be semantic Kubernetes values")
 	}
 
 	rules := webhook["rules"].([]any)
-	if len(rules) != 1 {
-		t.Fatalf("expected 1 non-empty rule, got %d", len(rules))
+	if len(rules) != 2 {
+		t.Fatalf("expected empty map entries in lists to be preserved; schema-blind pruning is unsafe because empty maps can be semantic Kubernetes values")
 	}
 }
 
@@ -640,6 +642,50 @@ rules:
 
 	if labels["app"] != "keep" {
 		t.Fatalf("expected non-matching label to remain, got %#v", labels["app"])
+	}
+}
+
+func TestApplyIgnoreRules_StatusRuleDoesNotRemoveNestedStatus(t *testing.T) {
+	t.Parallel()
+
+	rules, err := parseIgnoreConfigBytes("test", []byte(`
+rules:
+  - fields:
+      - status
+`))
+	if err != nil {
+		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+	}
+
+	obj := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":      "demo",
+			"namespace": "default",
+		},
+		"foo": map[string]any{
+			"status": "keep",
+		},
+		"foo.status": "keep-literal-key",
+		"status": map[string]any{
+			"phase": "remove",
+		},
+	}
+
+	applyIgnoreRules(obj, &options{ignoreRules: rules})
+
+	if _, ok := obj["status"]; ok {
+		t.Fatalf("expected top-level status to be removed")
+	}
+
+	foo := obj["foo"].(map[string]any)
+	if foo["status"] != "keep" {
+		t.Fatalf("expected nested foo.status to remain, got %#v", foo["status"])
+	}
+
+	if obj["foo.status"] != "keep-literal-key" {
+		t.Fatalf("expected literal foo.status key to remain, got %#v", obj["foo.status"])
 	}
 }
 

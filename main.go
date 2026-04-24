@@ -15,7 +15,6 @@ import (
 	"runtime"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/gavv/cobradoc"
@@ -675,7 +674,7 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 	}
 
 	applyIgnoreRules(obj, opts)
-	pruneEmptyMaps(obj)
+	pruneEmptyMetadataMaps(obj)
 
 	file, err := os.Create(filePath)
 	if err != nil {
@@ -696,86 +695,27 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 	return nil
 }
 
-func pruneEmptyMaps(obj map[string]any) {
-	pruneEmptyMapsValue(obj, nil)
+func pruneEmptyMetadataMaps(obj map[string]any) {
+	metadata, ok := obj["metadata"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	pruneEmptyMetadataMap(metadata, "annotations")
+	pruneEmptyMetadataMap(metadata, "labels")
 }
 
-func pruneEmptyMapsValue(value any, path []string) (any, bool) {
-	switch typed := value.(type) {
+func pruneEmptyMetadataMap(metadata map[string]any, field string) {
+	switch typed := metadata[field].(type) {
 	case map[string]any:
-		for key, child := range typed {
-			childPath := append(path, key)
-			prunedChild, remove := pruneEmptyMapsValue(child, childPath)
-			if remove {
-				delete(typed, key)
-				continue
-			}
-
-			typed[key] = prunedChild
+		if len(typed) == 0 {
+			delete(metadata, field)
 		}
-
-		if len(typed) == 0 && shouldPreserveEmptyMap(path) {
-			return typed, false
-		}
-
-		return typed, len(typed) == 0
 	case map[string]string:
-		return typed, len(typed) == 0
-	case []any:
-		pruned := typed[:0]
-		for idx, child := range typed {
-			childPath := append(path, strconv.Itoa(idx))
-			prunedChild, remove := pruneEmptyMapsValue(child, childPath)
-			if remove {
-				continue
-			}
-
-			pruned = append(pruned, prunedChild)
+		if len(typed) == 0 {
+			delete(metadata, field)
 		}
-
-		return pruned, false
-	case []map[string]any:
-		pruned := typed[:0]
-		for idx, child := range typed {
-			childPath := append(path, strconv.Itoa(idx))
-			prunedChild, remove := pruneEmptyMapsValue(child, childPath)
-			if remove {
-				continue
-			}
-
-			pruned = append(pruned, prunedChild.(map[string]any))
-		}
-
-		return pruned, false
-	case []map[string]string:
-		pruned := typed[:0]
-		for idx, child := range typed {
-			childPath := append(path, strconv.Itoa(idx))
-			prunedChild, remove := pruneEmptyMapsValue(child, childPath)
-			if remove {
-				continue
-			}
-
-			pruned = append(pruned, prunedChild.(map[string]string))
-		}
-
-		return pruned, false
-	default:
-		return value, false
 	}
-}
-
-func shouldPreserveEmptyMap(path []string) bool {
-	if len(path) < 2 {
-		return false
-	}
-
-	// CRD versioned subresources like subresources.status use an empty map as the
-	// semantic value. Removing them changes the manifest and breaks status writes.
-	last := path[len(path)-1]
-	parent := path[len(path)-2]
-
-	return parent == "subresources" && last == "status"
 }
 
 func writeCommonIgnoreConfig(w io.Writer) error {
