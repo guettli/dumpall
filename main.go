@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strings"
@@ -67,6 +68,7 @@ type options struct {
 	inputDir              string
 	namespacesCSV         string
 	nameRegex             string
+	comment               string
 	namespaceFilter       map[string]struct{}
 	nameFilterEnabled     bool
 	nameFilterRegex       *regexp.Regexp
@@ -180,6 +182,7 @@ func mainWithError() error {
 	pflag.StringVarP(&opts.nameRegex, "name-regex", "x", "", "Only dump resources where metadata.name matches this regex")
 	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "Read YAML manifests from file (do not connect to api-server)")
 	pflag.StringVarP(&opts.inputDir, "dir", "d", "", "Read YAML manifests recursively from directory (do not connect to api-server)")
+	pflag.StringVar(&opts.comment, "comment", "", "Additional comment line to add at the top of each output YAML file")
 
 	pflag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s\nRead resources from the api-server, a YAML file, or a YAML directory tree and dump each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n", toolNameForUsageOutput)
@@ -682,6 +685,11 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 	}
 	defer file.Close()
 
+	fmt.Fprintf(file, "# https://github.com/guettli/dumpall version: %s\n", getBuildVersion())
+	if opts.comment != "" {
+		fmt.Fprintf(file, "# %s\n", opts.comment)
+	}
+
 	encoder := yaml.NewEncoder(file)
 	defer encoder.Close()
 
@@ -693,6 +701,14 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 	}
 
 	return nil
+}
+
+func getBuildVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "unknown"
+	}
+	return info.Main.Version
 }
 
 func pruneEmptyMetadataMaps(obj map[string]any) {
