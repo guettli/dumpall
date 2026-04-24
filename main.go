@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/gavv/cobradoc"
@@ -696,14 +697,15 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 }
 
 func pruneEmptyMaps(obj map[string]any) {
-	pruneEmptyMapsValue(obj)
+	pruneEmptyMapsValue(obj, nil)
 }
 
-func pruneEmptyMapsValue(value any) (any, bool) {
+func pruneEmptyMapsValue(value any, path []string) (any, bool) {
 	switch typed := value.(type) {
 	case map[string]any:
 		for key, child := range typed {
-			prunedChild, remove := pruneEmptyMapsValue(child)
+			childPath := append(path, key)
+			prunedChild, remove := pruneEmptyMapsValue(child, childPath)
 			if remove {
 				delete(typed, key)
 				continue
@@ -712,13 +714,18 @@ func pruneEmptyMapsValue(value any) (any, bool) {
 			typed[key] = prunedChild
 		}
 
+		if len(typed) == 0 && shouldPreserveEmptyMap(path) {
+			return typed, false
+		}
+
 		return typed, len(typed) == 0
 	case map[string]string:
 		return typed, len(typed) == 0
 	case []any:
 		pruned := typed[:0]
-		for _, child := range typed {
-			prunedChild, remove := pruneEmptyMapsValue(child)
+		for idx, child := range typed {
+			childPath := append(path, strconv.Itoa(idx))
+			prunedChild, remove := pruneEmptyMapsValue(child, childPath)
 			if remove {
 				continue
 			}
@@ -729,8 +736,9 @@ func pruneEmptyMapsValue(value any) (any, bool) {
 		return pruned, false
 	case []map[string]any:
 		pruned := typed[:0]
-		for _, child := range typed {
-			prunedChild, remove := pruneEmptyMapsValue(child)
+		for idx, child := range typed {
+			childPath := append(path, strconv.Itoa(idx))
+			prunedChild, remove := pruneEmptyMapsValue(child, childPath)
 			if remove {
 				continue
 			}
@@ -741,8 +749,9 @@ func pruneEmptyMapsValue(value any) (any, bool) {
 		return pruned, false
 	case []map[string]string:
 		pruned := typed[:0]
-		for _, child := range typed {
-			prunedChild, remove := pruneEmptyMapsValue(child)
+		for idx, child := range typed {
+			childPath := append(path, strconv.Itoa(idx))
+			prunedChild, remove := pruneEmptyMapsValue(child, childPath)
 			if remove {
 				continue
 			}
@@ -754,6 +763,19 @@ func pruneEmptyMapsValue(value any) (any, bool) {
 	default:
 		return value, false
 	}
+}
+
+func shouldPreserveEmptyMap(path []string) bool {
+	if len(path) < 2 {
+		return false
+	}
+
+	// CRD versioned subresources like subresources.status use an empty map as the
+	// semantic value. Removing them changes the manifest and breaks status writes.
+	last := path[len(path)-1]
+	parent := path[len(path)-2]
+
+	return parent == "subresources" && last == "status"
 }
 
 func writeCommonIgnoreConfig(w io.Writer) error {

@@ -148,6 +148,72 @@ func TestPruneEmptyMaps_RemovesNestedMapFieldsAndListEntries(t *testing.T) {
 	}
 }
 
+func TestWriteYAML_PreservesCRDStatusSubresources(t *testing.T) {
+	t.Parallel()
+
+	obj := map[string]any{
+		"apiVersion": "apiextensions.k8s.io/v1",
+		"kind":       "CustomResourceDefinition",
+		"metadata": map[string]any{
+			"name": "extensionconfigs.runtime.cluster.x-k8s.io",
+		},
+		"spec": map[string]any{
+			"group": "runtime.cluster.x-k8s.io",
+			"names": map[string]any{
+				"kind":     "ExtensionConfig",
+				"plural":   "extensionconfigs",
+				"singular": "extensionconfig",
+			},
+			"scope": "Cluster",
+			"versions": []any{
+				map[string]any{
+					"name":    "v1alpha1",
+					"served":  true,
+					"storage": false,
+					"schema": map[string]any{
+						"openAPIV3Schema": map[string]any{
+							"type": "object",
+						},
+					},
+					"subresources": map[string]any{
+						"status": map[string]any{},
+					},
+				},
+				map[string]any{
+					"name":    "v1beta2",
+					"served":  true,
+					"storage": true,
+					"schema": map[string]any{
+						"openAPIV3Schema": map[string]any{
+							"type": "object",
+						},
+					},
+					"subresources": map[string]any{
+						"status": map[string]any{},
+					},
+				},
+			},
+		},
+	}
+
+	outFile := filepath.Join(t.TempDir(), "crd.yaml")
+	opts := &options{quiet: true}
+
+	if err := writeYAML(outFile, obj, opts); err != nil {
+		t.Fatalf("writeYAML returned error: %v", err)
+	}
+
+	contentBytes, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+
+	content := string(contentBytes)
+	if got := strings.Count(content, "status: {}"); got != 2 {
+		t.Fatalf("expected both CRD versions to keep subresources.status, got %d occurrences:\n%s", got, content)
+	}
+}
+
 func secretObject(fixtureValue string) map[string]any {
 	return map[string]any{
 		"apiVersion": "v1",
