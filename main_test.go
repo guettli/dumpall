@@ -912,6 +912,86 @@ skipResources:
 	}
 }
 
+func TestSkipRuleCoversGVR(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		yaml     string
+		group    string
+		kind     string
+		expected bool
+	}{
+		{
+			name:     "kind-only rule covers entire GVR",
+			yaml:     "skipResources:\n  - kind: Secret\n",
+			group:    "",
+			kind:     "Secret",
+			expected: true,
+		},
+		{
+			name:     "kind-only rule does not match other kinds",
+			yaml:     "skipResources:\n  - kind: Secret\n",
+			group:    "",
+			kind:     "ConfigMap",
+			expected: false,
+		},
+		{
+			name:     "group+kind rule covers entire GVR",
+			yaml:     "skipResources:\n  - group: apps\n    kind: Deployment\n",
+			group:    "apps",
+			kind:     "Deployment",
+			expected: true,
+		},
+		{
+			name:     "kind+namespace rule does not cover entire GVR (still need LIST)",
+			yaml:     "skipResources:\n  - kind: Secret\n    namespace: kube-*\n",
+			group:    "",
+			kind:     "Secret",
+			expected: false,
+		},
+		{
+			name:     "kind+name rule does not cover entire GVR (still need LIST)",
+			yaml:     "skipResources:\n  - kind: Secret\n    name: foo-*\n",
+			group:    "",
+			kind:     "Secret",
+			expected: false,
+		},
+		{
+			name:     "kind glob covers matching kinds",
+			yaml:     "skipResources:\n  - kind: \"*Role\"\n",
+			group:    "rbac.authorization.k8s.io",
+			kind:     "ClusterRole",
+			expected: true,
+		},
+		{
+			name:     "kind glob does not match unrelated kinds",
+			yaml:     "skipResources:\n  - kind: \"*Role\"\n",
+			group:    "",
+			kind:     "ConfigMap",
+			expected: false,
+		},
+	}
+
+	for i := range tests {
+		tc := tests[i]
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, skips, _, err := parseIgnoreConfigBytes("test", []byte(tc.yaml))
+			if err != nil {
+				t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+			}
+
+			got := skipRuleCoversGVR(skips, tc.group, tc.kind)
+			if got != tc.expected {
+				t.Fatalf("skipRuleCoversGVR(group=%q, kind=%q) = %v, want %v", tc.group, tc.kind, got, tc.expected)
+			}
+		})
+	}
+}
+
 func TestCompileSkipRule_RejectsEmptyRule(t *testing.T) {
 	t.Parallel()
 

@@ -515,11 +515,16 @@ func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourc
 				continue
 			}
 
+			group := getGroup(apiGroup.GroupVersion)
+			if skipRuleCoversGVR(opts.skipRules, group, resource.Kind) {
+				continue
+			}
+
 			gvrJobs = append(gvrJobs, gvrListJob{
 				groupVersion: apiGroup.GroupVersion,
 				resourceName: resource.Name,
 				gvr: schema.GroupVersionResource{
-					Group:    getGroup(apiGroup.GroupVersion),
+					Group:    group,
 					Version:  getVersion(apiGroup.GroupVersion),
 					Resource: resource.Name,
 				},
@@ -1103,6 +1108,25 @@ func (r skipRule) matches(identity objectIdentity) bool {
 		matchGlob(r.KindPattern, identity.Kind) &&
 		matchGlob(r.NamespacePattern, identity.Namespace) &&
 		matchGlob(r.NamePattern, identity.Name)
+}
+
+// skipRuleCoversGVR reports whether any rule would drop every resource of the
+// given group+kind regardless of namespace or name. When this holds, the LIST
+// call for that GVR can be skipped entirely — both as an optimization and to
+// avoid noisy "forbidden" warnings on clusters where the caller lacks list
+// permission for a kind the user already asked to skip.
+func skipRuleCoversGVR(rules []skipRule, group string, kind string) bool {
+	for _, rule := range rules {
+		if rule.NamespacePattern != "*" || rule.NamePattern != "*" {
+			continue
+		}
+
+		if matchGlob(rule.GroupPattern, group) && matchGlob(rule.KindPattern, kind) {
+			return true
+		}
+	}
+
+	return false
 }
 
 func patternOrWildcard(value *string) string {
