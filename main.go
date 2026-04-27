@@ -303,6 +303,9 @@ func readYamlFromFile(fileName string, opts *options) error {
 
 		bytes, err := os.ReadFile(fileName)
 		if err != nil {
+			if info, statErr := os.Stat(fileName); statErr == nil && info.IsDir() {
+				err = fmt.Errorf("%w (hint: use --dir/-d to read a directory of YAML files)", err)
+			}
 			events <- processingEvent{
 				err: fmt.Errorf("failed to read file %s: %w", fileName, err),
 			}
