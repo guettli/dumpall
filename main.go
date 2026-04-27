@@ -62,6 +62,7 @@ type options struct {
 	dumpSecrets           bool
 	dumpManagedFields     bool
 	removeOutdir          bool
+	skipOwned             bool
 	ignoreConfigUseCommon bool
 	ignoreConfigFile      string
 	fileName              string
@@ -176,6 +177,7 @@ func mainWithError() error {
 	pflag.BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
 	pflag.BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
 	pflag.BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
+	pflag.BoolVarP(&opts.skipOwned, "skip-owned", "O", false, "Skip resources that have a controlling owner reference (e.g., Pods owned by a ReplicaSet)")
 	pflag.BoolVar(&opts.ignoreConfigUseCommon, "ignore-config-use-common", false, "Use the embedded common ignore config")
 	pflag.StringVar(&opts.ignoreConfigFile, "ignore-config", "", "Path to a YAML file with ignore rules")
 	pflag.StringVarP(&opts.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to dump")
@@ -1147,7 +1149,21 @@ func parseNameFilterRegex(nameRegex string) (*regexp.Regexp, bool, error) {
 	return re, true, nil
 }
 
+func hasControllingOwner(item *unstructured.Unstructured) bool {
+	for _, ref := range item.GetOwnerReferences() {
+		if ref.Controller != nil && *ref.Controller {
+			return true
+		}
+	}
+
+	return false
+}
+
 func shouldProcessItem(item *unstructured.Unstructured, isNamespaced bool, opts *options) bool {
+	if opts.skipOwned && hasControllingOwner(item) {
+		return false
+	}
+
 	if opts.nameFilterEnabled {
 		if !opts.nameFilterRegex.MatchString(item.GetName()) {
 			return false

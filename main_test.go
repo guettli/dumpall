@@ -517,6 +517,102 @@ func TestShouldProcessItem_NameRegexAndNamespaceFilter(t *testing.T) {
 	}
 }
 
+func TestShouldProcessItem_SkipOwned(t *testing.T) {
+	t.Parallel()
+
+	controllerTrue := true
+	controllerFalse := false
+
+	tests := []struct {
+		name       string
+		owners     []any
+		skipOwned  bool
+		want       bool
+	}{
+		{
+			name:      "no owner references, skipOwned on",
+			owners:    nil,
+			skipOwned: true,
+			want:      true,
+		},
+		{
+			name: "non-controlling owner reference, skipOwned on",
+			owners: []any{
+				map[string]any{
+					"apiVersion": "v1",
+					"kind":       "Namespace",
+					"name":       "default",
+					"uid":        "uid-ns",
+					"controller": controllerFalse,
+				},
+			},
+			skipOwned: true,
+			want:      true,
+		},
+		{
+			name: "owner reference without controller field, skipOwned on",
+			owners: []any{
+				map[string]any{
+					"apiVersion": "v1",
+					"kind":       "Namespace",
+					"name":       "default",
+					"uid":        "uid-ns",
+				},
+			},
+			skipOwned: true,
+			want:      true,
+		},
+		{
+			name: "controlling owner reference, skipOwned on",
+			owners: []any{
+				map[string]any{
+					"apiVersion": "apps/v1",
+					"kind":       "ReplicaSet",
+					"name":       "my-rs",
+					"uid":        "uid-rs",
+					"controller": controllerTrue,
+				},
+			},
+			skipOwned: true,
+			want:      false,
+		},
+		{
+			name: "controlling owner reference, skipOwned off",
+			owners: []any{
+				map[string]any{
+					"apiVersion": "apps/v1",
+					"kind":       "ReplicaSet",
+					"name":       "my-rs",
+					"uid":        "uid-rs",
+					"controller": controllerTrue,
+				},
+			},
+			skipOwned: false,
+			want:      true,
+		},
+	}
+
+	for i := range tests {
+		tc := tests[i]
+
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			item := newObject("Pod", "p", "default")
+			if tc.owners != nil {
+				item.Object["metadata"].(map[string]any)["ownerReferences"] = tc.owners
+			}
+
+			opts := &options{skipOwned: tc.skipOwned}
+
+			got := shouldProcessItem(item, true, opts)
+			if got != tc.want {
+				t.Fatalf("shouldProcessItem() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseIgnoreConfigBytes_StrictUnknownField(t *testing.T) {
 	t.Parallel()
 

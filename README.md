@@ -18,6 +18,11 @@ To dump only specific namespaces, use `--namespaces` (or `-n`) with a comma-sepa
 
 To dump only resources whose `metadata.name` matches a regex, use `--name-regex` (or `-x`), for example `--name-regex '^kube-apiserver-.*'`.
 
+To skip resources that are managed by a controller (i.e. resources with an entry in
+`metadata.ownerReferences` where `controller: true`), use `--skip-owned` (or `-O`). For example,
+Pods owned by a ReplicaSet, ReplicaSets owned by a Deployment, or Jobs owned by a CronJob will be
+skipped. Resources with non-controlling owner references are still dumped.
+
 To read existing YAML manifests instead of connecting to the api-server, use `--file-name` (or `-f`) for a single file or `--dir` (or `-d`) for a directory tree. Directory input is recursive and useful if you want to normalize existing YAML files with ignore rules.
 
 Ignore rules are optional and off by default. There are three modes:
