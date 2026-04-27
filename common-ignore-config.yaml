@@ -1,4 +1,4 @@
-rules:
+removeFields:
   # Server-managed metadata and status.
   - fields:
       - metadata.creationTimestamp

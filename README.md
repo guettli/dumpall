@@ -18,6 +18,8 @@ To dump only specific namespaces, use `--namespaces` (or `-n`) with a comma-sepa
 
 To dump only resources whose `metadata.name` matches a regex, use `--name-regex` (or `-x`), for example `--name-regex '^kube-apiserver-.*'`.
 
+To skip resources whose `metadata.name` matches a glob, use `--skip-name-glob`, for example `--skip-name-glob 'foo-*'` skips every resource whose name starts with `foo-`. The glob is anchored, so `foo-*` matches `foo-bar` but not `myfoo-bar`. For more selective skipping (by kind, group, or namespace too), use the `skip:` section in the ignore config (see below).
+
 To skip resources that are managed by a controller (i.e. resources with an entry in
 `metadata.ownerReferences` where `controller: true`), use `--skip-owned` (or `-O`). For example,
 Pods owned by a ReplicaSet, ReplicaSets owned by a Deployment, or Jobs owned by a CronJob will be
@@ -46,7 +48,7 @@ The YAML schema is parsed in strict mode, so unknown fields fail fast.
 Example:
 
 ```yaml
-rules:
+removeFields:
   - group: apps
     kind: Deployment
     namespace: prod-*
@@ -60,7 +62,38 @@ rules:
       - metadata...kubernetes\.io/metadata\.name
 ```
 
-Rules match by `group`, `kind`, `namespace`, and `name` using globbing. If one of these matchers is omitted, it behaves like `*`. Cluster-scoped resources use the namespace `_cluster` for matching. Fields use dot notation, literal dots in map keys must be escaped as `\.` and individual path segments can use `*` or `?` glob wildcards, for example `metadata.labels.kapp\.k14s\.io/*`. The token `...` means recursive descent across zero or more nested levels, and paths automatically walk lists, so `webhooks.clientConfig.caBundle` removes `caBundle` from every webhook entry.
+Each `removeFields` rule matches resources by `group`, `kind`, `namespace`, and `name` using globbing, then deletes the listed fields from every match. If one of those matchers is omitted, it behaves like `*`. Cluster-scoped resources use the namespace `_cluster` for matching. Fields use dot notation, literal dots in map keys must be escaped as `\.` and individual path segments can use `*` or `?` glob wildcards, for example `metadata.labels.kapp\.k14s\.io/*`. The token `...` means recursive descent across zero or more nested levels, and paths automatically walk lists, so `webhooks.clientConfig.caBundle` removes `caBundle` from every webhook entry.
+
+The same config file can also list `skipResources` rules, which drop entire resources rather than just clearing fields:
+
+```yaml
+skipResources:
+  - kind: Event
+  - group: apps
+    kind: Deployment
+    namespace: test-*
+    name: debug-*
+```
+
+The first rule drops every `Event` resource cluster-wide. The second drops Deployments named `debug-*` in any `test-*` namespace.
+
+Each `skipResources` rule matches by `group`, `kind`, `namespace`, and `name` using the same globbing as `removeFields`, and **all** specified matchers must match for the resource to be skipped. Omitted matchers behave like `*`. Cluster-scoped resources use the namespace `_cluster`. A skip rule must set at least one matcher.
+
+Note: a rule like `kind: Namespace, name: foo-*` only drops the cluster-scoped `Namespace` object itself — it does *not* drop resources living inside `foo-*` namespaces. To skip a namespace **and** everything inside it, use `excludeNamespaces` (see below).
+
+To exclude entire namespaces from the dump — including the `Namespace` object **and** every resource inside — use the top-level `excludeNamespaces` key, or the `--exclude-namespaces` flag:
+
+```yaml
+excludeNamespaces:
+  - foo-*
+  - test-*
+```
+
+```terminal
+dumpall --exclude-namespaces 'foo-*,test-*'
+```
+
+Patterns are globs and resolve against the live namespace list. When connected to an api-server, dumpall passes a `metadata.namespace!=...` field selector on every namespaced `List` call, so excluded namespaces are filtered server-side and their resources never cross the wire — much faster than filtering client-side when one excluded namespace is huge. In file/dir input mode the same patterns are applied client-side.
 
 ## Via `go run`
 

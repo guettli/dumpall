@@ -69,15 +69,36 @@ type options struct {
 	inputDir              string
 	namespacesCSV         string
 	nameRegex             string
+	skipNameGlob          string
+	excludeNamespacesCSV  string
 	comment               string
 	namespaceFilter       map[string]struct{}
 	nameFilterEnabled     bool
 	nameFilterRegex       *regexp.Regexp
 	ignoreRules           []ignoreRule
+	skipRules             []skipRule
+	excludeNamespaces     []string
+	excludeFieldSelector  string
 }
 
 type ignoreConfig struct {
-	Rules []ignoreRuleFile `yaml:"rules"`
+	Rules             []ignoreRuleFile `yaml:"removeFields"`
+	Skip              []skipRuleFile   `yaml:"skipResources"`
+	ExcludeNamespaces []string         `yaml:"excludeNamespaces"`
+}
+
+type skipRuleFile struct {
+	Group     *string `yaml:"group"`
+	Kind      *string `yaml:"kind"`
+	Namespace *string `yaml:"namespace"`
+	Name      *string `yaml:"name"`
+}
+
+type skipRule struct {
+	GroupPattern     string
+	KindPattern      string
+	NamespacePattern string
+	NamePattern      string
 }
 
 type ignoreRuleFile struct {
@@ -182,6 +203,8 @@ func mainWithError() error {
 	pflag.StringVar(&opts.ignoreConfigFile, "ignore-config", "", "Path to a YAML file with ignore rules")
 	pflag.StringVarP(&opts.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to dump")
 	pflag.StringVarP(&opts.nameRegex, "name-regex", "x", "", "Only dump resources where metadata.name matches this regex")
+	pflag.StringVar(&opts.skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob (e.g. 'foo-*' skips names starting with 'foo-')")
+	pflag.StringVar(&opts.excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to fully exclude (e.g. 'foo-*,test-*'). Drops the Namespace object plus all resources inside; uses fieldSelector to skip those namespaces api-server-side")
 	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "Read YAML manifests from file (do not connect to api-server)")
 	pflag.StringVarP(&opts.inputDir, "dir", "d", "", "Read YAML manifests recursively from directory (do not connect to api-server)")
 	pflag.StringVar(&opts.comment, "comment", "", "Additional comment line to add at the top of each output YAML file")
@@ -221,12 +244,31 @@ func mainWithError() error {
 		return err
 	}
 
-	ignoreRules, err := loadIgnoreRules(opts.ignoreConfigUseCommon, opts.ignoreConfigFile)
+	ignoreRules, skipRules, excludes, err := loadIgnoreRules(opts.ignoreConfigUseCommon, opts.ignoreConfigFile)
 	if err != nil {
 		return err
 	}
 
 	opts.ignoreRules = ignoreRules
+	opts.skipRules = skipRules
+	opts.excludeNamespaces = excludes
+
+	if strings.TrimSpace(opts.skipNameGlob) != "" {
+		pattern := opts.skipNameGlob
+		flagRule, err := compileSkipRule(skipRuleFile{Name: &pattern})
+		if err != nil {
+			return fmt.Errorf("invalid --skip-name-glob: %w", err)
+		}
+
+		opts.skipRules = append(opts.skipRules, flagRule)
+	}
+
+	cliExcludes, err := parseExcludeNamespacesCSV(opts.excludeNamespacesCSV)
+	if err != nil {
+		return err
+	}
+
+	opts.excludeNamespaces = append(opts.excludeNamespaces, cliExcludes...)
 
 	if opts.removeOutdir {
 		err := os.RemoveAll(opts.outputDir)
@@ -453,6 +495,10 @@ func enqueueYAMLBytesAsJobs(bytes []byte, sourceName string, opts *options, jobs
 }
 
 func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourceList, opts *options) error {
+	if err := resolveExcludeNamespaceFieldSelector(client, opts); err != nil {
+		return err
+	}
+
 	sort.Slice(resourceList, func(i int, j int) bool {
 		return resourceList[i].GroupVersion < resourceList[j].GroupVersion
 	})
@@ -516,8 +562,52 @@ func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourc
 	return finalizeProcessing(events, opts)
 }
 
+var namespacesGVR = schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}
+
+// resolveExcludeNamespaceFieldSelector resolves the configured globs against
+// the live namespace list and stores a fieldSelector on opts so namespaced
+// listings skip those namespaces api-server-side.
+func resolveExcludeNamespaceFieldSelector(client dynamic.Interface, opts *options) error {
+	if len(opts.excludeNamespaces) == 0 {
+		return nil
+	}
+
+	list, err := client.Resource(namespacesGVR).List(context.TODO(), meta.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list namespaces for --exclude-namespaces resolution: %w", err)
+	}
+
+	excluded := make([]string, 0)
+	for i := range list.Items {
+		name := list.Items[i].GetName()
+		for _, pattern := range opts.excludeNamespaces {
+			if matchGlob(pattern, name) {
+				excluded = append(excluded, name)
+				break
+			}
+		}
+	}
+
+	if len(excluded) == 0 {
+		return nil
+	}
+
+	parts := make([]string, 0, len(excluded))
+	for _, name := range excluded {
+		parts = append(parts, "metadata.namespace!="+name)
+	}
+
+	opts.excludeFieldSelector = strings.Join(parts, ",")
+	return nil
+}
+
 func enqueueGVRItems(client dynamic.Interface, job gvrListJob, opts *options, writeJobs chan<- resourceWriteJob) error {
-	list, err := client.Resource(job.gvr).List(context.TODO(), meta.ListOptions{})
+	listOpts := meta.ListOptions{}
+	if job.isNamespaced && opts.excludeFieldSelector != "" {
+		listOpts.FieldSelector = opts.excludeFieldSelector
+	}
+
+	list, err := client.Resource(job.gvr).List(context.TODO(), listOpts)
 	if err != nil {
 		return fmt.Errorf("failed to list resources for %s: %w", job.gvr.Resource, err)
 	}
@@ -748,65 +838,133 @@ func writeCommonIgnoreConfig(w io.Writer) error {
 	return nil
 }
 
-func loadIgnoreRules(useCommon bool, userConfigFile string) ([]ignoreRule, error) {
+func loadIgnoreRules(useCommon bool, userConfigFile string) ([]ignoreRule, []skipRule, []string, error) {
 	trimmedFileName := strings.TrimSpace(userConfigFile)
 	rules := make([]ignoreRule, 0)
+	skips := make([]skipRule, 0)
+	excludes := make([]string, 0)
 
 	if useCommon {
-		commonRules, err := parseIgnoreConfigBytes("embedded common ignore config", commonIgnoreConfig)
+		commonRules, commonSkips, commonExcludes, err := parseIgnoreConfigBytes("embedded common ignore config", commonIgnoreConfig)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
 
 		rules = append(rules, commonRules...)
+		skips = append(skips, commonSkips...)
+		excludes = append(excludes, commonExcludes...)
 	}
 
 	if trimmedFileName == "" {
-		return rules, nil
+		return rules, skips, excludes, nil
 	}
 
 	userConfigBytes, err := os.ReadFile(trimmedFileName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read ignore config %s: %w", trimmedFileName, err)
+		return nil, nil, nil, fmt.Errorf("failed to read ignore config %s: %w", trimmedFileName, err)
 	}
 
-	userRules, err := parseIgnoreConfigBytes(trimmedFileName, userConfigBytes)
+	userRules, userSkips, userExcludes, err := parseIgnoreConfigBytes(trimmedFileName, userConfigBytes)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
-	return append(rules, userRules...), nil
+	rules = append(rules, userRules...)
+	skips = append(skips, userSkips...)
+	excludes = append(excludes, userExcludes...)
+
+	return rules, skips, excludes, nil
 }
 
-func parseIgnoreConfigBytes(name string, data []byte) ([]ignoreRule, error) {
+func parseIgnoreConfigBytes(name string, data []byte) ([]ignoreRule, []skipRule, []string, error) {
+	if err := rejectLegacyIgnoreConfigKeys(name, data); err != nil {
+		return nil, nil, nil, err
+	}
+
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
 
 	var cfg ignoreConfig
 	if err := decoder.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("failed to parse ignore config %s: %w", name, err)
+		return nil, nil, nil, fmt.Errorf("failed to parse ignore config %s: %w", name, err)
 	}
 
 	var extra any
 	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
 		if err == nil {
-			return nil, fmt.Errorf("failed to parse ignore config %s: expected a single YAML document", name)
+			return nil, nil, nil, fmt.Errorf("failed to parse ignore config %s: expected a single YAML document", name)
 		}
 
-		return nil, fmt.Errorf("failed to parse ignore config %s: %w", name, err)
+		return nil, nil, nil, fmt.Errorf("failed to parse ignore config %s: %w", name, err)
 	}
 
 	rules := make([]ignoreRule, 0, len(cfg.Rules))
 	for idx := range cfg.Rules {
 		rule, err := compileIgnoreRule(cfg.Rules[idx])
 		if err != nil {
-			return nil, fmt.Errorf("invalid ignore rule %d in %s: %w", idx+1, name, err)
+			return nil, nil, nil, fmt.Errorf("invalid ignore rule %d in %s: %w", idx+1, name, err)
 		}
 
 		rules = append(rules, rule)
 	}
 
-	return rules, nil
+	skips := make([]skipRule, 0, len(cfg.Skip))
+	for idx := range cfg.Skip {
+		skip, err := compileSkipRule(cfg.Skip[idx])
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("invalid skip rule %d in %s: %w", idx+1, name, err)
+		}
+
+		skips = append(skips, skip)
+	}
+
+	excludes, err := validateExcludeNamespacePatterns(name, cfg.ExcludeNamespaces)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return rules, skips, excludes, nil
+}
+
+func parseExcludeNamespacesCSV(csv string) ([]string, error) {
+	trimmed := strings.TrimSpace(csv)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	patterns := make([]string, 0)
+	for _, entry := range strings.Split(csv, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		patterns = append(patterns, entry)
+	}
+
+	if len(patterns) == 0 {
+		return nil, fmt.Errorf("invalid --exclude-namespaces %q: no patterns found", csv)
+	}
+
+	return validateExcludeNamespacePatterns("--exclude-namespaces", patterns)
+}
+
+func validateExcludeNamespacePatterns(source string, patterns []string) ([]string, error) {
+	out := make([]string, 0, len(patterns))
+	for idx, pattern := range patterns {
+		trimmed := strings.TrimSpace(pattern)
+		if trimmed == "" {
+			return nil, fmt.Errorf("invalid excludeNamespaces entry %d in %s: empty pattern", idx+1, source)
+		}
+
+		if err := validateGlobPattern(trimmed); err != nil {
+			return nil, fmt.Errorf("invalid excludeNamespaces entry %d in %s: invalid glob %q: %w", idx+1, source, trimmed, err)
+		}
+
+		out = append(out, trimmed)
+	}
+
+	return out, nil
 }
 
 func compileIgnoreRule(fileRule ignoreRuleFile) (ignoreRule, error) {
@@ -868,6 +1026,83 @@ func compileIgnoreRule(fileRule ignoreRuleFile) (ignoreRule, error) {
 		NamePattern:      namePattern,
 		Fields:           fields,
 	}, nil
+}
+
+// rejectLegacyIgnoreConfigKeys catches configs that still use the old
+// top-level keys (`rules:` / `skip:`) and reports a clear rename hint instead
+// of the generic "field not found in type" error from strict parsing.
+func rejectLegacyIgnoreConfigKeys(name string, data []byte) error {
+	var preview map[string]any
+	if err := yaml.Unmarshal(data, &preview); err != nil {
+		// Let the strict parser surface the real error.
+		return nil
+	}
+
+	legacy := []struct {
+		oldKey string
+		newKey string
+	}{
+		{"rules", "removeFields"},
+		{"skip", "skipResources"},
+	}
+
+	for _, entry := range legacy {
+		if _, ok := preview[entry.oldKey]; ok {
+			return fmt.Errorf("ignore config %s uses legacy key %q — rename it to %q", name, entry.oldKey, entry.newKey)
+		}
+	}
+
+	return nil
+}
+
+func compileSkipRule(fileRule skipRuleFile) (skipRule, error) {
+	if !skipRuleHasMatcher(fileRule) {
+		return skipRule{}, fmt.Errorf("skip rule must set at least one of group, kind, namespace, name")
+	}
+
+	groupPattern := patternOrWildcard(fileRule.Group)
+	if err := validateGlobPattern(groupPattern); err != nil {
+		return skipRule{}, fmt.Errorf("invalid group glob %q: %w", groupPattern, err)
+	}
+
+	kindPattern := patternOrWildcard(fileRule.Kind)
+	if err := validateGlobPattern(kindPattern); err != nil {
+		return skipRule{}, fmt.Errorf("invalid kind glob %q: %w", kindPattern, err)
+	}
+
+	namespacePattern := patternOrWildcard(fileRule.Namespace)
+	if err := validateGlobPattern(namespacePattern); err != nil {
+		return skipRule{}, fmt.Errorf("invalid namespace glob %q: %w", namespacePattern, err)
+	}
+
+	namePattern := patternOrWildcard(fileRule.Name)
+	if err := validateGlobPattern(namePattern); err != nil {
+		return skipRule{}, fmt.Errorf("invalid name glob %q: %w", namePattern, err)
+	}
+
+	return skipRule{
+		GroupPattern:     groupPattern,
+		KindPattern:      kindPattern,
+		NamespacePattern: namespacePattern,
+		NamePattern:      namePattern,
+	}, nil
+}
+
+func skipRuleHasMatcher(fileRule skipRuleFile) bool {
+	for _, value := range []*string{fileRule.Group, fileRule.Kind, fileRule.Namespace, fileRule.Name} {
+		if value != nil && strings.TrimSpace(*value) != "" {
+			return true
+		}
+	}
+
+	return false
+}
+
+func (r skipRule) matches(identity objectIdentity) bool {
+	return matchGlob(r.GroupPattern, identity.Group) &&
+		matchGlob(r.KindPattern, identity.Kind) &&
+		matchGlob(r.NamespacePattern, identity.Namespace) &&
+		matchGlob(r.NamePattern, identity.Name)
 }
 
 func patternOrWildcard(value *string) string {
@@ -967,6 +1202,20 @@ func objectIdentityFromObject(obj map[string]any) objectIdentity {
 		Kind:      u.GetKind(),
 		Namespace: namespace,
 		Name:      u.GetName(),
+	}
+}
+
+func objectIdentityFromUnstructured(item *unstructured.Unstructured, isNamespaced bool) objectIdentity {
+	namespace := item.GetNamespace()
+	if !isNamespaced {
+		namespace = clusterNamespace
+	}
+
+	return objectIdentity{
+		Group:     getGroup(item.GetAPIVersion()),
+		Kind:      item.GetKind(),
+		Namespace: namespace,
+		Name:      item.GetName(),
 	}
 }
 
@@ -1152,6 +1401,36 @@ func parseNameFilterRegex(nameRegex string) (*regexp.Regexp, bool, error) {
 	return re, true, nil
 }
 
+// matchesExcludedNamespace reports whether the item should be dropped because
+// it lives in (or is) one of the excluded namespaces. Cluster-scoped Namespace
+// objects are matched by their name; every other resource is matched by its
+// metadata.namespace.
+func matchesExcludedNamespace(item *unstructured.Unstructured, isNamespaced bool, patterns []string) bool {
+	if len(patterns) == 0 {
+		return false
+	}
+
+	target := ""
+	switch {
+	case isNamespaced:
+		target = item.GetNamespace()
+	case item.GetKind() == "Namespace" && getGroup(item.GetAPIVersion()) == "":
+		target = item.GetName()
+	}
+
+	if target == "" {
+		return false
+	}
+
+	for _, pattern := range patterns {
+		if matchGlob(pattern, target) {
+			return true
+		}
+	}
+
+	return false
+}
+
 func hasControllingOwner(item *unstructured.Unstructured) bool {
 	for _, ref := range item.GetOwnerReferences() {
 		if ref.Controller != nil && *ref.Controller {
@@ -1221,6 +1500,19 @@ func isKubeRootCAConfigMap(item *unstructured.Unstructured) bool {
 func shouldProcessItem(item *unstructured.Unstructured, isNamespaced bool, opts *options) bool {
 	if opts.skipOwned && (hasControllingOwner(item) || isAutogeneratedByKubernetes(item)) {
 		return false
+	}
+
+	if matchesExcludedNamespace(item, isNamespaced, opts.excludeNamespaces) {
+		return false
+	}
+
+	if len(opts.skipRules) > 0 {
+		identity := objectIdentityFromUnstructured(item, isNamespaced)
+		for _, rule := range opts.skipRules {
+			if rule.matches(identity) {
+				return false
+			}
+		}
 	}
 
 	if opts.nameFilterEnabled {
