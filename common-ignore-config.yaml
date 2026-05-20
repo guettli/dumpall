@@ -10,6 +10,7 @@ removeFields:
       - metadata.annotations.deployment\.kubernetes\.io/revision
       - metadata.annotations.clusterctl\.cluster\.x-k8s\.io
       - metadata.annotations.kubectl\.kubernetes\.io/last-applied-configuration
+      - metadata.labels.argocd\.argoproj\.io/instance
       - status
   # Namespace-specific noise added by the API server.
   - kind: Namespace
