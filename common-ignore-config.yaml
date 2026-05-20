@@ -12,6 +12,12 @@ removeFields:
       - metadata.annotations.kubectl\.kubernetes\.io/last-applied-configuration
       - metadata.labels.argocd\.argoproj\.io/instance
       - status
+      # Helm charts often render labels/annotations as explicit null when the
+      # chart has no values for them. The API server never returns null here.
+      - path: metadata.labels
+        value: null
+      - path: metadata.annotations
+        value: null
   # Namespace-specific noise added by the API server.
   - kind: Namespace
     fields:
@@ -29,12 +35,19 @@ removeFields:
       - webhooks.reinvocationPolicy
       - webhooks.rules.scope
       - webhooks.timeoutSeconds
-  # CRD conversion webhook defaults.
+  # CRD conversion webhook defaults and None-strategy cleanup.
   - group: apiextensions.k8s.io
     kind: CustomResourceDefinition
     fields:
       - spec.conversion.webhook.clientConfig.caBundle
       - spec.conversion.webhook.clientConfig.service.port
+      # CRDs without webhook conversion have spec.conversion: {strategy: None}.
+      # Removing strategy (only when None) leaves an empty map, then removes it.
+      # CRDs with webhook conversion keep strategy: Webhook and all webhook fields.
+      - path: spec.conversion.strategy
+        value: None
+      - path: spec.conversion
+        value: {}
 
   # ── Service ───────────────────────────────────────────────────────────────────
   - kind: Service
@@ -62,6 +75,14 @@ removeFields:
       - path: spec.sessionAffinity
         value: None
 
+      # Default protocol for Service ports. UDP/SCTP would be explicit.
+      - path: spec.ports.protocol
+        value: TCP
+
+      # Default Service type. NodePort/LoadBalancer/ExternalName would be explicit.
+      - path: spec.type
+        value: ClusterIP
+
   # ── Deployment ────────────────────────────────────────────────────────────────
   - group: apps
     kind: Deployment
@@ -73,6 +94,20 @@ removeFields:
       # Default: 10.
       - path: spec.revisionHistoryLimit
         value: 10
+
+      # Default RollingUpdate strategy. Fields are removed leaf-to-root so that
+      # each parent map becomes empty and matches its {} constraint in sequence.
+      # Recreate strategy and non-default maxSurge/maxUnavailable are preserved.
+      - path: spec.strategy.rollingUpdate.maxSurge
+        value: 25%
+      - path: spec.strategy.rollingUpdate.maxUnavailable
+        value: 25%
+      - path: spec.strategy.rollingUpdate
+        value: {}
+      - path: spec.strategy.type
+        value: RollingUpdate
+      - path: spec.strategy
+        value: {}
 
       # Always null in the API response for pod templates.
       - spec.template.metadata.creationTimestamp
@@ -157,6 +192,21 @@ removeFields:
       - path: spec.template.spec.volumes.secret.defaultMode
         value: 420
 
+      # Empty pod-level security context. Real settings (runAsGroup, fsGroup, …)
+      # produce a non-empty map and are preserved by the value constraint.
+      - path: spec.template.spec.securityContext
+        value: {}
+
+      # Empty container resources means no requests/limits are set.
+      - path: spec.template.spec.containers.resources
+        value: {}
+
+      # Empty nodeSelector/tolerations are equivalent to absent.
+      - path: spec.template.spec.nodeSelector
+        value: {}
+      - path: spec.template.spec.tolerations
+        value: []
+
   # ── StatefulSet ───────────────────────────────────────────────────────────────
   - group: apps
     kind: StatefulSet
@@ -168,6 +218,25 @@ removeFields:
       # Default: 10.
       - path: spec.revisionHistoryLimit
         value: 10
+
+      # Default RollingUpdate update strategy (leaf-to-root). OnDelete and
+      # non-zero partition values are preserved by the value constraints.
+      - path: spec.updateStrategy.rollingUpdate.partition
+        value: 0
+      - path: spec.updateStrategy.rollingUpdate
+        value: {}
+      - path: spec.updateStrategy.type
+        value: RollingUpdate
+      - path: spec.updateStrategy
+        value: {}
+
+      # Default PVC retention policy (Retain/Retain). Delete policies preserved.
+      - path: spec.persistentVolumeClaimRetentionPolicy.whenDeleted
+        value: Retain
+      - path: spec.persistentVolumeClaimRetentionPolicy.whenScaled
+        value: Retain
+      - path: spec.persistentVolumeClaimRetentionPolicy
+        value: {}
 
       # Same pod-template defaults as Deployment — see comments above.
       - spec.template.metadata.creationTimestamp
@@ -228,4 +297,20 @@ removeFields:
         value: 420
       - path: spec.template.spec.volumes.secret.defaultMode
         value: 420
+      - path: spec.template.spec.securityContext
+        value: {}
+      - path: spec.template.spec.containers.resources
+        value: {}
+      - path: spec.template.spec.nodeSelector
+        value: {}
+      - path: spec.template.spec.tolerations
+        value: []
 
+  # ── RoleBinding / ClusterRoleBinding ──────────────────────────────────────────
+  - group: rbac.authorization.k8s.io
+    kind: "*RoleBinding"
+    fields:
+      # The API server omits apiGroup: "" on ServiceAccount subjects (it is the
+      # implicit default). Helm-rendered manifests often include it explicitly.
+      - path: subjects.apiGroup
+        value: ""
