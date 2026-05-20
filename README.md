@@ -139,6 +139,41 @@ go run github.com/guettli/dumpall@latest
 meld out-1 out
 ```
 
+## Pre-Deploy
+
+Imagine you use the Rendered Manifest Pattern, and you have created your desired state in a bunch of
+YAML files in the directory called `generated`.
+
+Now you want to know: what will happen when these files get applied. You could use `kubectl diff -R
+-f generated`, but this requires permission to PATCH resources. In many setups only
+ArgoCD has that permission. Additionally, it
+will show many differences that are not real differences (like ArgoCD labels).
+
+You can see a clean diff like this:
+
+Generate a normalized version of your desired-state:
+
+```bash
+go run github.com/guettli/dumpall@latest --read-yaml-from ./generated --ignore-config-use-common -o desired-state
+```
+
+Generate a normalized version of the current state:
+
+```bash
+go run github.com/guettli/dumpall@latest --read-resource-names-from ./generated --ignore-config-use-common -o current-state
+```
+
+Now compare both directories with your favorite tool, like `diff -r` or `meld`:
+
+```bash
+diff -r current-state desired-state
+```
+
+I guess you use Pull-Requests for GitOps. You could make your CI create the above output for each
+PR, so you directly see what will happen if you apply these changes. In most cases this will be
+identical to the changes you see in the PR (directory `generated` is in git). But sometimes things
+are different. Especially, if you modify `ignoreDifference` of ArgoCD.
+
 ## Related
 
 - [check-conditions](https://github.com/guettli/check-conditions) Tiny tool to check all conditions of all resources in your Kubernetes cluster.
