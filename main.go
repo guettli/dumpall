@@ -109,11 +109,50 @@ type skipRule struct {
 }
 
 type ignoreRuleFile struct {
-	Group     *string  `yaml:"group"`
-	Kind      *string  `yaml:"kind"`
-	Namespace *string  `yaml:"namespace"`
-	Name      *string  `yaml:"name"`
-	Fields    []string `yaml:"fields"`
+	Group     *string               `yaml:"group"`
+	Kind      *string               `yaml:"kind"`
+	Namespace *string               `yaml:"namespace"`
+	Name      *string               `yaml:"name"`
+	Fields    []ignoreFieldEntryFile `yaml:"fields"`
+}
+
+// ignoreFieldEntryFile is a single entry in the fields list of a removeFields rule.
+// It is either a plain field path string, or a map with "path" and optional "value" keys.
+type ignoreFieldEntryFile struct {
+	Path             string
+	Value            any
+	valueConstrained bool
+}
+
+func (e *ignoreFieldEntryFile) UnmarshalYAML(value *yaml.Node) error {
+	switch value.Kind {
+	case yaml.ScalarNode:
+		e.Path = value.Value
+		return nil
+	case yaml.MappingNode:
+		for i := 0; i < len(value.Content)-1; i += 2 {
+			key := value.Content[i].Value
+			if key != "path" && key != "value" {
+				return fmt.Errorf("unknown field %q in field entry (allowed: path, value)", key)
+			}
+		}
+		var m struct {
+			Path  string `yaml:"path"`
+			Value any    `yaml:"value"`
+		}
+		if err := value.Decode(&m); err != nil {
+			return err
+		}
+		if m.Path == "" {
+			return fmt.Errorf("field entry map must have a non-empty 'path' key")
+		}
+		e.Path = m.Path
+		e.Value = m.Value
+		e.valueConstrained = true
+		return nil
+	default:
+		return fmt.Errorf("field entry must be a string or a map with 'path' and optional 'value' keys")
+	}
 }
 
 type ignoreRule struct {
@@ -125,7 +164,9 @@ type ignoreRule struct {
 }
 
 type ignoreFieldPath struct {
-	segments []string
+	segments         []string
+	value            any
+	valueConstrained bool
 }
 
 type objectIdentity struct {
@@ -1025,7 +1066,7 @@ func validateExcludeNamespacePatterns(source string, patterns []string) ([]strin
 func compileIgnoreRule(fileRule ignoreRuleFile) (ignoreRule, error) {
 	fields := make([]ignoreFieldPath, 0, len(fileRule.Fields))
 	for _, field := range fileRule.Fields {
-		trimmed := strings.TrimSpace(field)
+		trimmed := strings.TrimSpace(field.Path)
 		if trimmed == "" {
 			return ignoreRule{}, fmt.Errorf("fields must not contain empty entries")
 		}
@@ -1046,7 +1087,9 @@ func compileIgnoreRule(fileRule ignoreRuleFile) (ignoreRule, error) {
 		}
 
 		fields = append(fields, ignoreFieldPath{
-			segments: segments,
+			segments:         segments,
+			value:            field.Value,
+			valueConstrained: field.valueConstrained,
 		})
 	}
 
@@ -1259,7 +1302,7 @@ func applyIgnoreRules(obj map[string]any, opts *options) {
 				continue
 			}
 
-			deleteFieldPath(obj, field.segments)
+			deleteFieldPath(obj, field.segments, field.value, field.valueConstrained)
 		}
 	}
 }
@@ -1313,67 +1356,70 @@ func isManagedFieldsPath(segments []string) bool {
 	return len(segments) == 2 && segments[0] == "metadata" && segments[1] == "managedFields"
 }
 
-func deleteFieldPath(current any, segments []string) {
+func deleteFieldPath(current any, segments []string, constraintValue any, constrained bool) {
 	if len(segments) == 0 {
 		return
 	}
 
 	if segments[0] == "..." {
-		deleteFieldPathRecursive(current, segments[1:])
+		deleteFieldPathRecursive(current, segments[1:], constraintValue, constrained)
 		return
 	}
 
 	switch typed := current.(type) {
 	case map[string]any:
-		deleteFieldPathFromMap(typed, segments)
+		deleteFieldPathFromMap(typed, segments, constraintValue, constrained)
 	case map[string]string:
-		deleteFieldPathFromStringMap(typed, segments)
+		deleteFieldPathFromStringMap(typed, segments, constraintValue, constrained)
 	case []any:
 		for _, entry := range typed {
-			deleteFieldPath(entry, segments)
+			deleteFieldPath(entry, segments, constraintValue, constrained)
 		}
 	case []map[string]any:
 		for _, entry := range typed {
-			deleteFieldPath(entry, segments)
+			deleteFieldPath(entry, segments, constraintValue, constrained)
 		}
 	case []map[string]string:
 		for _, entry := range typed {
-			deleteFieldPath(entry, segments)
+			deleteFieldPath(entry, segments, constraintValue, constrained)
 		}
 	}
 }
 
-func deleteFieldPathRecursive(current any, remaining []string) {
+func deleteFieldPathRecursive(current any, remaining []string, constraintValue any, constrained bool) {
 	if len(remaining) == 0 {
 		return
 	}
 
-	deleteFieldPath(current, remaining)
+	deleteFieldPath(current, remaining, constraintValue, constrained)
 
 	switch typed := current.(type) {
 	case map[string]any:
 		for _, value := range typed {
-			deleteFieldPathRecursive(value, remaining)
+			deleteFieldPathRecursive(value, remaining, constraintValue, constrained)
 		}
 	case []any:
 		for _, entry := range typed {
-			deleteFieldPathRecursive(entry, remaining)
+			deleteFieldPathRecursive(entry, remaining, constraintValue, constrained)
 		}
 	case []map[string]any:
 		for _, entry := range typed {
-			deleteFieldPathRecursive(entry, remaining)
+			deleteFieldPathRecursive(entry, remaining, constraintValue, constrained)
 		}
 	case []map[string]string:
 		for _, entry := range typed {
-			deleteFieldPathRecursive(entry, remaining)
+			deleteFieldPathRecursive(entry, remaining, constraintValue, constrained)
 		}
 	}
 }
 
-func deleteFieldPathFromMap(current map[string]any, segments []string) {
+func deleteFieldPathFromMap(current map[string]any, segments []string, constraintValue any, constrained bool) {
 	keyPattern := segments[0]
 	if !hasFieldSegmentWildcard(keyPattern) {
 		if len(segments) == 1 {
+			if constrained && !valueMatches(current[keyPattern], constraintValue) {
+				return
+			}
 			delete(current, keyPattern)
 			return
 		}
@@ -1383,7 +1429,7 @@ func deleteFieldPathFromMap(current map[string]any, segments []string) {
 			return
 		}
 
-		deleteFieldPath(next, segments[1:])
+		deleteFieldPath(next, segments[1:], constraintValue, constrained)
 		return
 	}
 
@@ -1393,30 +1439,46 @@ func deleteFieldPathFromMap(current map[string]any, segments []string) {
 		}
 
 		if len(segments) == 1 {
+			if constrained && !valueMatches(current[key], constraintValue) {
+				continue
+			}
 			delete(current, key)
 			continue
 		}
 
-		deleteFieldPath(next, segments[1:])
+		deleteFieldPath(next, segments[1:], constraintValue, constrained)
 	}
 }
 
-func deleteFieldPathFromStringMap(current map[string]string, segments []string) {
+func deleteFieldPathFromStringMap(current map[string]string, segments []string, constraintValue any, constrained bool) {
 	if len(segments) != 1 {
 		return
 	}
 
 	keyPattern := segments[0]
 	if !hasFieldSegmentWildcard(keyPattern) {
+		if constrained && !valueMatches(current[keyPattern], constraintValue) {
+			return
+		}
 		delete(current, keyPattern)
 		return
 	}
 
 	for key := range current {
 		if matchGlob(keyPattern, key) {
+			if constrained && !valueMatches(current[key], constraintValue) {
+				continue
+			}
 			delete(current, key)
 		}
 	}
+}
+
+func valueMatches(actual, expected any) bool {
+	if fmt.Sprintf("%v", actual) == fmt.Sprintf("%v", expected) {
+		return true
+	}
+	return false
 }
 
 func hasFieldSegmentWildcard(segment string) bool {

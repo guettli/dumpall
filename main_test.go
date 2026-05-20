@@ -1338,6 +1338,117 @@ removeFields:
 	}
 }
 
+func TestApplyIgnoreRules_ValueConstraint_MatchingValueDeletes(t *testing.T) {
+	t.Parallel()
+
+	rules, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+removeFields:
+  - kind: Deployment
+    fields:
+      - path: spec.progressDeadlineSeconds
+        value: 600
+`))
+	if err != nil {
+		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+	}
+
+	obj := map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata":   map[string]any{"name": "demo", "namespace": "default"},
+		"spec":       map[string]any{"progressDeadlineSeconds": float64(600)},
+	}
+
+	applyIgnoreRules(obj, &options{ignoreRules: rules})
+
+	spec := obj["spec"].(map[string]any)
+	if _, ok := spec["progressDeadlineSeconds"]; ok {
+		t.Fatalf("expected progressDeadlineSeconds to be removed when value matches")
+	}
+}
+
+func TestApplyIgnoreRules_ValueConstraint_NonMatchingValueKeeps(t *testing.T) {
+	t.Parallel()
+
+	rules, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+removeFields:
+  - kind: Deployment
+    fields:
+      - path: spec.progressDeadlineSeconds
+        value: 600
+`))
+	if err != nil {
+		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+	}
+
+	obj := map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata":   map[string]any{"name": "demo", "namespace": "default"},
+		"spec":       map[string]any{"progressDeadlineSeconds": float64(120)},
+	}
+
+	applyIgnoreRules(obj, &options{ignoreRules: rules})
+
+	spec := obj["spec"].(map[string]any)
+	if spec["progressDeadlineSeconds"] != float64(120) {
+		t.Fatalf("expected progressDeadlineSeconds to remain when value does not match, got %#v", spec["progressDeadlineSeconds"])
+	}
+}
+
+func TestApplyIgnoreRules_ValueConstraint_MixedFieldsInSameRule(t *testing.T) {
+	t.Parallel()
+
+	rules, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+removeFields:
+  - kind: Deployment
+    fields:
+      - metadata.generation
+      - path: spec.progressDeadlineSeconds
+        value: 600
+`))
+	if err != nil {
+		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+	}
+
+	obj := map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata":   map[string]any{"name": "demo", "namespace": "default", "generation": int64(3)},
+		"spec":       map[string]any{"progressDeadlineSeconds": float64(600), "replicas": float64(1)},
+	}
+
+	applyIgnoreRules(obj, &options{ignoreRules: rules})
+
+	metadata := obj["metadata"].(map[string]any)
+	if _, ok := metadata["generation"]; ok {
+		t.Fatalf("expected generation (no value constraint) to be removed")
+	}
+
+	spec := obj["spec"].(map[string]any)
+	if _, ok := spec["progressDeadlineSeconds"]; ok {
+		t.Fatalf("expected progressDeadlineSeconds to be removed when value matches")
+	}
+	if spec["replicas"] != float64(1) {
+		t.Fatalf("expected replicas to remain untouched, got %#v", spec["replicas"])
+	}
+}
+
+func TestParseIgnoreConfigBytes_ValueConstraint_UnknownKeyRejected(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+removeFields:
+  - fields:
+      - path: spec.foo
+        value: bar
+        unknown: oops
+`))
+	if err == nil {
+		t.Fatal("expected error for unknown key in field entry map")
+	}
+}
+
 func TestWriteYAML_NoIgnoreRulesByDefault(t *testing.T) {
 	t.Parallel()
 

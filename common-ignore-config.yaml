@@ -35,3 +35,211 @@ removeFields:
     fields:
       - spec.conversion.webhook.clientConfig.caBundle
       - spec.conversion.webhook.clientConfig.service.port
+
+  # ── Service ───────────────────────────────────────────────────────────────────
+  - kind: Service
+    fields:
+      # Assigned by the API server from the cluster's service CIDR at creation
+      # time. Never written in source YAML. Changes on every new Service object.
+      - spec.clusterIP
+      - spec.clusterIPs
+
+      # Derived from the cluster's IP-family configuration, not from user intent.
+      - spec.ipFamilies
+      - spec.ipFamilyPolicy
+
+      # Default: Cluster. API server writes it even when the field is omitted.
+      - path: spec.internalTrafficPolicy
+        value: Cluster
+
+      # Default: None. Only alternative is ClientIP, which would be explicit.
+      - path: spec.sessionAffinity
+        value: None
+
+  # ── Deployment ────────────────────────────────────────────────────────────────
+  - group: apps
+    kind: Deployment
+    fields:
+      # Default: 600.
+      - path: spec.progressDeadlineSeconds
+        value: 600
+
+      # Default: 10.
+      - path: spec.revisionHistoryLimit
+        value: 10
+
+      # Full default RollingUpdate strategy (maxSurge 25%, maxUnavailable 25%).
+      # A custom strategy (e.g. Recreate) would be present in both states.
+      - spec.strategy
+
+      # Always null in the API response for pod templates.
+      - spec.template.metadata.creationTimestamp
+
+      # Default: Always. The only valid value for Deployment pod templates.
+      - path: spec.template.spec.restartPolicy
+        value: Always
+
+      # Default: default-scheduler.
+      - path: spec.template.spec.schedulerName
+        value: default-scheduler
+
+      # Default: ClusterFirst.
+      - path: spec.template.spec.dnsPolicy
+        value: ClusterFirst
+
+      # Default: 30 seconds.
+      - path: spec.template.spec.terminationGracePeriodSeconds
+        value: 30
+
+      # Deprecated alias for serviceAccountName. Copied automatically by the API server.
+      - spec.template.spec.serviceAccount
+
+      # Default: /dev/termination-log.
+      - path: spec.template.spec.containers.terminationMessagePath
+        value: /dev/termination-log
+      - path: spec.template.spec.initContainers.terminationMessagePath
+        value: /dev/termination-log
+
+      # Default: File.
+      - path: spec.template.spec.containers.terminationMessagePolicy
+        value: File
+      - path: spec.template.spec.initContainers.terminationMessagePolicy
+        value: File
+
+      # API server always sets apiVersion: v1 on fieldRef. It is the only valid value.
+      - path: spec.template.spec.containers.env.valueFrom.fieldRef.apiVersion
+        value: v1
+
+      # Default protocol for container port declarations. UDP/SCTP would be explicit.
+      - path: spec.template.spec.containers.ports.protocol
+        value: TCP
+
+      # Probe defaults (failureThreshold: 3, successThreshold: 1, timeoutSeconds: 1,
+      # httpGet.scheme: HTTP, tcpSocket.protocol: TCP).
+      - path: spec.template.spec.containers.livenessProbe.failureThreshold
+        value: 3
+      - path: spec.template.spec.containers.livenessProbe.successThreshold
+        value: 1
+      - path: spec.template.spec.containers.livenessProbe.timeoutSeconds
+        value: 1
+      - path: spec.template.spec.containers.livenessProbe.httpGet.scheme
+        value: HTTP
+      - path: spec.template.spec.containers.livenessProbe.tcpSocket.protocol
+        value: TCP
+      - path: spec.template.spec.containers.readinessProbe.failureThreshold
+        value: 3
+      - path: spec.template.spec.containers.readinessProbe.successThreshold
+        value: 1
+      - path: spec.template.spec.containers.readinessProbe.timeoutSeconds
+        value: 1
+      - path: spec.template.spec.containers.readinessProbe.httpGet.scheme
+        value: HTTP
+      - path: spec.template.spec.containers.readinessProbe.tcpSocket.protocol
+        value: TCP
+      - path: spec.template.spec.containers.startupProbe.failureThreshold
+        value: 3
+      - path: spec.template.spec.containers.startupProbe.successThreshold
+        value: 1
+      - path: spec.template.spec.containers.startupProbe.timeoutSeconds
+        value: 1
+      - path: spec.template.spec.containers.startupProbe.httpGet.scheme
+        value: HTTP
+      - path: spec.template.spec.containers.startupProbe.tcpSocket.protocol
+        value: TCP
+
+      # Default file-permission mode: 0644 (decimal 420).
+      - path: spec.template.spec.volumes.configMap.defaultMode
+        value: 420
+      - path: spec.template.spec.volumes.projected.defaultMode
+        value: 420
+      - path: spec.template.spec.volumes.secret.defaultMode
+        value: 420
+
+  # ── StatefulSet ───────────────────────────────────────────────────────────────
+  - group: apps
+    kind: StatefulSet
+    fields:
+      # Default: OrderedReady.
+      - path: spec.podManagementPolicy
+        value: OrderedReady
+
+      # Default: {whenDeleted: Retain, whenScaled: Retain}. Complex object; no
+      # single scalar value to constrain on.
+      - spec.persistentVolumeClaimRetentionPolicy
+
+      # Default: 10.
+      - path: spec.revisionHistoryLimit
+        value: 10
+
+      # Default: {type: RollingUpdate, rollingUpdate: {partition: 0}}. Complex object.
+      - spec.updateStrategy
+
+      # Same pod-template defaults as Deployment — see comments above.
+      - spec.template.metadata.creationTimestamp
+      - path: spec.template.spec.restartPolicy
+        value: Always
+      - path: spec.template.spec.schedulerName
+        value: default-scheduler
+      - path: spec.template.spec.dnsPolicy
+        value: ClusterFirst
+      - path: spec.template.spec.terminationGracePeriodSeconds
+        value: 30
+      - spec.template.spec.serviceAccount
+      - path: spec.template.spec.containers.terminationMessagePath
+        value: /dev/termination-log
+      - path: spec.template.spec.initContainers.terminationMessagePath
+        value: /dev/termination-log
+      - path: spec.template.spec.containers.terminationMessagePolicy
+        value: File
+      - path: spec.template.spec.initContainers.terminationMessagePolicy
+        value: File
+      - path: spec.template.spec.containers.env.valueFrom.fieldRef.apiVersion
+        value: v1
+      - path: spec.template.spec.containers.ports.protocol
+        value: TCP
+      - path: spec.template.spec.containers.livenessProbe.failureThreshold
+        value: 3
+      - path: spec.template.spec.containers.livenessProbe.successThreshold
+        value: 1
+      - path: spec.template.spec.containers.livenessProbe.timeoutSeconds
+        value: 1
+      - path: spec.template.spec.containers.livenessProbe.httpGet.scheme
+        value: HTTP
+      - path: spec.template.spec.containers.livenessProbe.tcpSocket.protocol
+        value: TCP
+      - path: spec.template.spec.containers.readinessProbe.failureThreshold
+        value: 3
+      - path: spec.template.spec.containers.readinessProbe.successThreshold
+        value: 1
+      - path: spec.template.spec.containers.readinessProbe.timeoutSeconds
+        value: 1
+      - path: spec.template.spec.containers.readinessProbe.httpGet.scheme
+        value: HTTP
+      - path: spec.template.spec.containers.readinessProbe.tcpSocket.protocol
+        value: TCP
+      - path: spec.template.spec.containers.startupProbe.failureThreshold
+        value: 3
+      - path: spec.template.spec.containers.startupProbe.successThreshold
+        value: 1
+      - path: spec.template.spec.containers.startupProbe.timeoutSeconds
+        value: 1
+      - path: spec.template.spec.containers.startupProbe.httpGet.scheme
+        value: HTTP
+      - path: spec.template.spec.containers.startupProbe.tcpSocket.protocol
+        value: TCP
+      - path: spec.template.spec.volumes.configMap.defaultMode
+        value: 420
+      - path: spec.template.spec.volumes.projected.defaultMode
+        value: 420
+      - path: spec.template.spec.volumes.secret.defaultMode
+        value: 420
+
+  # ── CustomResourceDefinition (strategy default) ───────────────────────────────
+  - group: apiextensions.k8s.io
+    kind: CustomResourceDefinition
+    fields:
+      # For CRDs that do not use webhook conversion the API server writes
+      # spec.conversion: {strategy: None}. This is the default and carries no
+      # information. CRDs with webhook conversion have spec.conversion fully
+      # populated; the webhook CA and port sub-fields are handled above.
+      - spec.conversion
