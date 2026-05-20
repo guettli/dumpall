@@ -32,7 +32,19 @@ skipped. Resources with non-controlling owner references are still dumped.
 - The `default` ServiceAccount that the service-account controller creates in every namespace.
 - The `kube-root-ca.crt` ConfigMap that the root-ca-cert-publisher creates in every namespace.
 
-To read existing YAML manifests instead of connecting to the api-server, use `--file-name` (or `-f`) for a single file or `--dir` (or `-d`) for a directory tree. Directory input is recursive and useful if you want to normalize existing YAML files with ignore rules.
+To read existing YAML manifests instead of connecting to the api-server, use `--read-yaml-from` with a file or directory path. Directory input is recursive. This is useful for normalizing YAML files for better diffing — for example, stripping server-managed fields before committing manifests to git (see the [Rendered Manifests Pattern](https://akuity.io/blog/the-rendered-manifests-pattern)).
+
+```terminal
+# Normalize all manifests in a directory tree (strip noisy fields, then re-write)
+dumpall --read-yaml-from ./manifests --ignore-config-use-common --out-dir ./normalized
+```
+
+To dump only a specific subset of resources from the api-server, use `--read-resource-names-from` with a file or directory of YAML manifests. dumpall reads the `kind`, `namespace`, and `name` of each resource in those files and dumps only the matching resources from the cluster. This pairs well with the [Rendered Manifests Pattern](https://akuity.io/blog/the-rendered-manifests-pattern):
+
+```terminal
+# Dump only the resources described in your rendered manifests directory
+dumpall --read-resource-names-from ./rendered-manifests --out-dir ./cluster-state
+```
 
 Ignore rules are optional and off by default. There are three modes:
 
@@ -129,8 +141,8 @@ meld out-1 out
 
 ## Related
 
-* [check-conditions](https://github.com/guettli/check-conditions) Tiny tool to check all conditions of all resources in your Kubernetes cluster.
-* [Thomas WOL: Working out Loud](https://github.com/guettli/wol) Articles, projects, and insights spanning various topics in software development.
+- [check-conditions](https://github.com/guettli/check-conditions) Tiny tool to check all conditions of all resources in your Kubernetes cluster.
+- [Thomas WOL: Working out Loud](https://github.com/guettli/wol) Articles, projects, and insights spanning various topics in software development.
 
 ## Feedback is welcome
 

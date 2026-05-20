@@ -315,15 +315,6 @@ func TestParseNameFilterRegex_Empty(t *testing.T) {
 	}
 }
 
-func TestValidateInputSources_MutuallyExclusive(t *testing.T) {
-	t.Parallel()
-
-	err := validateInputSources("input.yaml", "manifests")
-	if err == nil {
-		t.Fatalf("expected error when --file-name and --dir are both set")
-	}
-}
-
 func TestReadYamlFromDir_RecursiveAndAppliesIgnoreRules(t *testing.T) {
 	t.Parallel()
 

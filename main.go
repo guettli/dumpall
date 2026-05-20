@@ -65,8 +65,8 @@ type options struct {
 	skipOwned             bool
 	ignoreConfigUseCommon bool
 	ignoreConfigFile      string
-	fileName              string
-	inputDir              string
+	readYamlFrom          string
+	readResourceNamesFrom string
 	namespacesCSV         string
 	nameRegex             string
 	skipNameGlob          string
@@ -79,6 +79,13 @@ type options struct {
 	skipRules             []skipRule
 	excludeNamespaces     []string
 	excludeFieldSelector  string
+	resourceNameFilter    map[resourceNameKey]struct{}
+}
+
+type resourceNameKey struct {
+	Kind      string
+	Namespace string
+	Name      string
 }
 
 type ignoreConfig struct {
@@ -205,12 +212,12 @@ func mainWithError() error {
 	pflag.StringVarP(&opts.nameRegex, "name-regex", "x", "", "Only dump resources where metadata.name matches this regex")
 	pflag.StringVar(&opts.skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob (e.g. 'foo-*' skips names starting with 'foo-')")
 	pflag.StringVar(&opts.excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to fully exclude (e.g. 'foo-*,test-*'). Drops the Namespace object plus all resources inside; uses fieldSelector to skip those namespaces api-server-side")
-	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "Read YAML manifests from file (do not connect to api-server)")
-	pflag.StringVarP(&opts.inputDir, "dir", "d", "", "Read YAML manifests recursively from directory (do not connect to api-server)")
+	pflag.StringVar(&opts.readYamlFrom, "read-yaml-from", "", "Read YAML manifests from a file or directory instead of connecting to the api-server. Useful for normalizing existing YAML files for better diffing.")
+	pflag.StringVar(&opts.readResourceNamesFrom, "read-resource-names-from", "", "Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources.")
 	pflag.StringVar(&opts.comment, "comment", "", "Additional comment line to add at the top of each output YAML file")
 
 	pflag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s\nRead resources from the api-server, a YAML file, or a YAML directory tree and dump each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n", toolNameForUsageOutput)
+		fmt.Fprintf(os.Stderr, "Usage: %s\nRead resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n", toolNameForUsageOutput)
 		pflag.PrintDefaults()
 	}
 
@@ -236,13 +243,8 @@ func mainWithError() error {
 	opts.nameFilterEnabled = nameFilterEnabled
 	opts.nameFilterRegex = nameFilterRegex
 
-	opts.fileName = strings.TrimSpace(opts.fileName)
-	opts.inputDir = strings.TrimSpace(opts.inputDir)
-
-	err = validateInputSources(opts.fileName, opts.inputDir)
-	if err != nil {
-		return err
-	}
+	opts.readYamlFrom = strings.TrimSpace(opts.readYamlFrom)
+	opts.readResourceNamesFrom = strings.TrimSpace(opts.readResourceNamesFrom)
 
 	ignoreRules, skipRules, excludes, err := loadIgnoreRules(opts.ignoreConfigUseCommon, opts.ignoreConfigFile)
 	if err != nil {
@@ -286,12 +288,23 @@ func mainWithError() error {
 		return fmt.Errorf("failed to inspect output directory %q: %w", opts.outputDir, err)
 	}
 
-	if opts.fileName != "" {
-		return readYamlFromFile(opts.fileName, opts)
+	if opts.readResourceNamesFrom != "" {
+		filter, err := loadResourceNameFilter(opts.readResourceNamesFrom)
+		if err != nil {
+			return err
+		}
+		opts.resourceNameFilter = filter
 	}
 
-	if opts.inputDir != "" {
-		return readYamlFromDir(opts.inputDir, opts)
+	if opts.readYamlFrom != "" {
+		info, err := os.Stat(opts.readYamlFrom)
+		if err != nil {
+			return fmt.Errorf("failed to inspect --read-yaml-from path %q: %w", opts.readYamlFrom, err)
+		}
+		if info.IsDir() {
+			return readYamlFromDir(opts.readYamlFrom, opts)
+		}
+		return readYamlFromFile(opts.readYamlFrom, opts)
 	}
 
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
@@ -326,14 +339,6 @@ func mainWithError() error {
 	return readFromAPIServer(dynClient, resourceList, opts)
 }
 
-func validateInputSources(fileName string, inputDir string) error {
-	if fileName != "" && inputDir != "" {
-		return fmt.Errorf("--file-name and --dir are mutually exclusive")
-	}
-
-	return nil
-}
-
 func readYamlFromFile(fileName string, opts *options) error {
 	writeJobs, events, writerDone, writerCount := startWriteWorkers(opts)
 	producerDone := make(chan struct{}, 1)
@@ -345,9 +350,6 @@ func readYamlFromFile(fileName string, opts *options) error {
 
 		bytes, err := os.ReadFile(fileName)
 		if err != nil {
-			if info, statErr := os.Stat(fileName); statErr == nil && info.IsDir() {
-				err = fmt.Errorf("%w (hint: use --dir/-d to read a directory of YAML files)", err)
-			}
 			events <- processingEvent{
 				err: fmt.Errorf("failed to read file %s: %w", fileName, err),
 			}
@@ -446,6 +448,54 @@ func findYAMLFiles(dirPath string) ([]string, error) {
 	sort.Strings(yamlFiles)
 
 	return yamlFiles, nil
+}
+
+func loadResourceNameFilter(fromPath string) (map[resourceNameKey]struct{}, error) {
+	var filePaths []string
+
+	info, err := os.Stat(fromPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect --read-resource-names-from path %q: %w", fromPath, err)
+	}
+
+	if info.IsDir() {
+		filePaths, err = findYAMLFiles(fromPath)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		filePaths = []string{fromPath}
+	}
+
+	filter := make(map[resourceNameKey]struct{})
+	for _, filePath := range filePaths {
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
+		}
+
+		nodes, err := kio.FromBytes(data)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse YAML in %s: %w", filePath, err)
+		}
+
+		for _, node := range nodes {
+			m, err := node.Map()
+			if err != nil {
+				return nil, fmt.Errorf("failed to convert document in %s to map: %w", filePath, err)
+			}
+
+			u := &unstructured.Unstructured{Object: m}
+			ns := u.GetNamespace()
+			if ns == "" {
+				ns = clusterNamespace
+			}
+
+			filter[resourceNameKey{Kind: u.GetKind(), Namespace: ns, Name: u.GetName()}] = struct{}{}
+		}
+	}
+
+	return filter, nil
 }
 
 func isYAMLFile(filePath string) bool {
@@ -1522,6 +1572,17 @@ func isKubeRootCAConfigMap(item *unstructured.Unstructured) bool {
 }
 
 func shouldProcessItem(item *unstructured.Unstructured, isNamespaced bool, opts *options) bool {
+	if opts.resourceNameFilter != nil {
+		ns := item.GetNamespace()
+		if !isNamespaced || ns == "" {
+			ns = clusterNamespace
+		}
+		key := resourceNameKey{Kind: item.GetKind(), Namespace: ns, Name: item.GetName()}
+		if _, ok := opts.resourceNameFilter[key]; !ok {
+			return false
+		}
+	}
+
 	if opts.skipOwned && (hasControllingOwner(item) || isAutogeneratedByKubernetes(item)) {
 		return false
 	}
