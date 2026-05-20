@@ -44,9 +44,15 @@ removeFields:
       - spec.clusterIP
       - spec.clusterIPs
 
-      # Derived from the cluster's IP-family configuration, not from user intent.
+      # Derived from the cluster's primary IP family; varies between IPv4-only,
+      # IPv6-only, and dual-stack clusters. Never written in source YAML.
       - spec.ipFamilies
-      - spec.ipFamilyPolicy
+
+      # Default: SingleStack. The API server writes it when the field is omitted.
+      # PreferDualStack and RequireDualStack are explicit user choices and are
+      # retained by the value constraint.
+      - path: spec.ipFamilyPolicy
+        value: SingleStack
 
       # Default: Cluster. API server writes it even when the field is omitted.
       - path: spec.internalTrafficPolicy
@@ -67,10 +73,6 @@ removeFields:
       # Default: 10.
       - path: spec.revisionHistoryLimit
         value: 10
-
-      # Full default RollingUpdate strategy (maxSurge 25%, maxUnavailable 25%).
-      # A custom strategy (e.g. Recreate) would be present in both states.
-      - spec.strategy
 
       # Always null in the API response for pod templates.
       - spec.template.metadata.creationTimestamp
@@ -163,16 +165,9 @@ removeFields:
       - path: spec.podManagementPolicy
         value: OrderedReady
 
-      # Default: {whenDeleted: Retain, whenScaled: Retain}. Complex object; no
-      # single scalar value to constrain on.
-      - spec.persistentVolumeClaimRetentionPolicy
-
       # Default: 10.
       - path: spec.revisionHistoryLimit
         value: 10
-
-      # Default: {type: RollingUpdate, rollingUpdate: {partition: 0}}. Complex object.
-      - spec.updateStrategy
 
       # Same pod-template defaults as Deployment — see comments above.
       - spec.template.metadata.creationTimestamp
@@ -234,12 +229,3 @@ removeFields:
       - path: spec.template.spec.volumes.secret.defaultMode
         value: 420
 
-  # ── CustomResourceDefinition (strategy default) ───────────────────────────────
-  - group: apiextensions.k8s.io
-    kind: CustomResourceDefinition
-    fields:
-      # For CRDs that do not use webhook conversion the API server writes
-      # spec.conversion: {strategy: None}. This is the default and carries no
-      # information. CRDs with webhook conversion have spec.conversion fully
-      # populated; the webhook CA and port sub-fields are handled above.
-      - spec.conversion
