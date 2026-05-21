@@ -585,8 +585,42 @@ func enqueueYAMLBytesAsJobs(bytes []byte, sourceName string, opts *options, jobs
 	return nil
 }
 
+func validateNamespaceFilter(client dynamic.Interface, opts *options) error {
+	if len(opts.namespaceFilter) == 0 {
+		return nil
+	}
+
+	list, err := client.Resource(namespacesGVR).List(context.TODO(), meta.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list namespaces for --namespaces validation: %w", err)
+	}
+
+	existing := make(map[string]struct{}, len(list.Items))
+	for i := range list.Items {
+		existing[list.Items[i].GetName()] = struct{}{}
+	}
+
+	missing := make([]string, 0)
+	for ns := range opts.namespaceFilter {
+		if _, ok := existing[ns]; !ok {
+			missing = append(missing, ns)
+		}
+	}
+
+	if len(missing) > 0 {
+		sort.Strings(missing)
+		return fmt.Errorf("--namespaces: namespace(s) not found in cluster: %s", strings.Join(missing, ", "))
+	}
+
+	return nil
+}
+
 func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourceList, opts *options) error {
 	if err := resolveExcludeNamespaceFieldSelector(client, opts); err != nil {
+		return err
+	}
+
+	if err := validateNamespaceFilter(client, opts); err != nil {
 		return err
 	}
 
