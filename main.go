@@ -72,6 +72,7 @@ type options struct {
 	skipNameGlob          string
 	excludeNamespacesCSV  string
 	comment               string
+	fileName              string
 	namespaceFilter       map[string]struct{}
 	nameFilterEnabled     bool
 	nameFilterRegex       *regexp.Regexp
@@ -256,6 +257,8 @@ func mainWithError() error {
 	pflag.StringVar(&opts.readYamlFrom, "read-yaml-from", "", "Read YAML manifests from a file or directory instead of connecting to the api-server. Useful for normalizing existing YAML files for better diffing.")
 	pflag.StringVar(&opts.readResourceNamesFrom, "read-resource-names-from", "", "Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources.")
 	pflag.StringVar(&opts.comment, "comment", "", "Additional comment line to add at the top of each output YAML file")
+	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "Alias for --read-yaml-from (hidden)")
+	_ = pflag.CommandLine.MarkHidden("file-name")
 
 	pflag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s\nRead resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n", toolNameForUsageOutput)
@@ -285,6 +288,13 @@ func mainWithError() error {
 	opts.nameFilterRegex = nameFilterRegex
 
 	opts.readYamlFrom = strings.TrimSpace(opts.readYamlFrom)
+	opts.fileName = strings.TrimSpace(opts.fileName)
+	if opts.fileName != "" {
+		if opts.readYamlFrom != "" {
+			return fmt.Errorf("--file-name (-f) and --read-yaml-from are mutually exclusive")
+		}
+		opts.readYamlFrom = opts.fileName
+	}
 	opts.readResourceNamesFrom = strings.TrimSpace(opts.readResourceNamesFrom)
 
 	ignoreRules, skipRules, excludes, err := loadIgnoreRules(opts.ignoreConfigUseCommon, opts.ignoreConfigFile)
