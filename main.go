@@ -260,7 +260,7 @@ func mainWithError() error {
 	pflag.StringVar(&opts.comment, "comment", "", "Additional comment line to add at the top of each output YAML file")
 	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "Alias for --read-yaml-from (hidden)")
 	_ = pflag.CommandLine.MarkHidden("file-name")
-	pflag.StringVar(&opts.dir, "dir", "", "Alias for --out-dir (hidden)")
+	pflag.StringVar(&opts.dir, "dir", "", "Alias for --read-yaml-from (hidden)")
 	_ = pflag.CommandLine.MarkHidden("dir")
 
 	pflag.Usage = func() {
@@ -290,14 +290,14 @@ func mainWithError() error {
 	opts.nameFilterEnabled = nameFilterEnabled
 	opts.nameFilterRegex = nameFilterRegex
 
+	opts.readYamlFrom = strings.TrimSpace(opts.readYamlFrom)
 	opts.dir = strings.TrimSpace(opts.dir)
 	if opts.dir != "" {
-		if pflag.Lookup("out-dir").Changed {
-			return fmt.Errorf("--dir and --out-dir are mutually exclusive")
+		if opts.readYamlFrom != "" {
+			return fmt.Errorf("--dir and --read-yaml-from are mutually exclusive")
 		}
-		opts.outputDir = opts.dir
+		opts.readYamlFrom = opts.dir
 	}
-	opts.readYamlFrom = strings.TrimSpace(opts.readYamlFrom)
 	opts.fileName = strings.TrimSpace(opts.fileName)
 	if opts.fileName != "" {
 		if opts.readYamlFrom != "" {
