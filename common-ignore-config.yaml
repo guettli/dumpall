@@ -197,8 +197,17 @@ removeFields:
       - path: spec.template.spec.securityContext
         value: {}
 
+      # Default imagePullPolicy for non-latest images. IfNotPresent is the
+      # Kubernetes default when the image tag is neither "latest" nor absent.
+      - path: spec.template.spec.containers.imagePullPolicy
+        value: IfNotPresent
+      - path: spec.template.spec.initContainers.imagePullPolicy
+        value: IfNotPresent
+
       # Empty container resources means no requests/limits are set.
       - path: spec.template.spec.containers.resources
+        value: {}
+      - path: spec.template.spec.initContainers.resources
         value: {}
 
       # Empty nodeSelector/tolerations are equivalent to absent.
@@ -299,7 +308,108 @@ removeFields:
         value: 420
       - path: spec.template.spec.securityContext
         value: {}
+      - path: spec.template.spec.containers.imagePullPolicy
+        value: IfNotPresent
+      - path: spec.template.spec.initContainers.imagePullPolicy
+        value: IfNotPresent
       - path: spec.template.spec.containers.resources
+        value: {}
+      - path: spec.template.spec.initContainers.resources
+        value: {}
+      - path: spec.template.spec.nodeSelector
+        value: {}
+      - path: spec.template.spec.tolerations
+        value: []
+
+  # ── DaemonSet ─────────────────────────────────────────────────────────────────
+  - group: apps
+    kind: DaemonSet
+    fields:
+      # Default: 10.
+      - path: spec.revisionHistoryLimit
+        value: 10
+
+      # Default RollingUpdate update strategy (leaf-to-root). OnDelete and
+      # non-zero maxUnavailable/maxSurge are preserved by the value constraints.
+      - path: spec.updateStrategy.rollingUpdate.maxUnavailable
+        value: 1
+      - path: spec.updateStrategy.rollingUpdate.maxSurge
+        value: 0
+      - path: spec.updateStrategy.rollingUpdate
+        value: {}
+      - path: spec.updateStrategy.type
+        value: RollingUpdate
+      - path: spec.updateStrategy
+        value: {}
+
+      # Same pod-template defaults as Deployment — see comments above.
+      - spec.template.metadata.creationTimestamp
+      - path: spec.template.spec.restartPolicy
+        value: Always
+      - path: spec.template.spec.schedulerName
+        value: default-scheduler
+      - path: spec.template.spec.dnsPolicy
+        value: ClusterFirst
+      - path: spec.template.spec.terminationGracePeriodSeconds
+        value: 30
+      - spec.template.spec.serviceAccount
+      - path: spec.template.spec.containers.terminationMessagePath
+        value: /dev/termination-log
+      - path: spec.template.spec.initContainers.terminationMessagePath
+        value: /dev/termination-log
+      - path: spec.template.spec.containers.terminationMessagePolicy
+        value: File
+      - path: spec.template.spec.initContainers.terminationMessagePolicy
+        value: File
+      - path: spec.template.spec.containers.env.valueFrom.fieldRef.apiVersion
+        value: v1
+      - path: spec.template.spec.containers.ports.protocol
+        value: TCP
+      - path: spec.template.spec.containers.livenessProbe.failureThreshold
+        value: 3
+      - path: spec.template.spec.containers.livenessProbe.successThreshold
+        value: 1
+      - path: spec.template.spec.containers.livenessProbe.timeoutSeconds
+        value: 1
+      - path: spec.template.spec.containers.livenessProbe.httpGet.scheme
+        value: HTTP
+      - path: spec.template.spec.containers.livenessProbe.tcpSocket.protocol
+        value: TCP
+      - path: spec.template.spec.containers.readinessProbe.failureThreshold
+        value: 3
+      - path: spec.template.spec.containers.readinessProbe.successThreshold
+        value: 1
+      - path: spec.template.spec.containers.readinessProbe.timeoutSeconds
+        value: 1
+      - path: spec.template.spec.containers.readinessProbe.httpGet.scheme
+        value: HTTP
+      - path: spec.template.spec.containers.readinessProbe.tcpSocket.protocol
+        value: TCP
+      - path: spec.template.spec.containers.startupProbe.failureThreshold
+        value: 3
+      - path: spec.template.spec.containers.startupProbe.successThreshold
+        value: 1
+      - path: spec.template.spec.containers.startupProbe.timeoutSeconds
+        value: 1
+      - path: spec.template.spec.containers.startupProbe.httpGet.scheme
+        value: HTTP
+      - path: spec.template.spec.containers.startupProbe.tcpSocket.protocol
+        value: TCP
+      - path: spec.template.spec.volumes.configMap.defaultMode
+        value: 420
+      - path: spec.template.spec.volumes.projected.defaultMode
+        value: 420
+      - path: spec.template.spec.volumes.secret.defaultMode
+        value: 420
+      - path: spec.template.spec.securityContext
+        value: {}
+      - path: spec.template.spec.containers.imagePullPolicy
+        value: IfNotPresent
+      - path: spec.template.spec.initContainers.imagePullPolicy
+        value: IfNotPresent
+      - path: spec.template.spec.containers.resources
+        value: {}
+      - path: spec.template.spec.initContainers.resources
         value: {}
       - path: spec.template.spec.nodeSelector
         value: {}
