@@ -73,6 +73,7 @@ type options struct {
 	excludeNamespacesCSV  string
 	comment               string
 	fileName              string
+	dir                   string
 	namespaceFilter       map[string]struct{}
 	nameFilterEnabled     bool
 	nameFilterRegex       *regexp.Regexp
@@ -259,6 +260,8 @@ func mainWithError() error {
 	pflag.StringVar(&opts.comment, "comment", "", "Additional comment line to add at the top of each output YAML file")
 	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "Alias for --read-yaml-from (hidden)")
 	_ = pflag.CommandLine.MarkHidden("file-name")
+	pflag.StringVar(&opts.dir, "dir", "", "Alias for --out-dir (hidden)")
+	_ = pflag.CommandLine.MarkHidden("dir")
 
 	pflag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s\nRead resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n", toolNameForUsageOutput)
@@ -287,6 +290,13 @@ func mainWithError() error {
 	opts.nameFilterEnabled = nameFilterEnabled
 	opts.nameFilterRegex = nameFilterRegex
 
+	opts.dir = strings.TrimSpace(opts.dir)
+	if opts.dir != "" {
+		if pflag.Lookup("out-dir").Changed {
+			return fmt.Errorf("--dir and --out-dir are mutually exclusive")
+		}
+		opts.outputDir = opts.dir
+	}
 	opts.readYamlFrom = strings.TrimSpace(opts.readYamlFrom)
 	opts.fileName = strings.TrimSpace(opts.fileName)
 	if opts.fileName != "" {
