@@ -1449,6 +1449,124 @@ removeFields:
 	}
 }
 
+func TestApplyIgnoreRules_OmitEmpty_RemovesNilField(t *testing.T) {
+	t.Parallel()
+
+	rules, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+removeFields:
+  - fields:
+      - path: metadata.labels
+        omitempty: true
+`))
+	if err != nil {
+		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+	}
+
+	obj := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":      "demo",
+			"namespace": "default",
+			"labels":    nil,
+		},
+	}
+
+	applyIgnoreRules(obj, &options{ignoreRules: rules})
+
+	metadata := obj["metadata"].(map[string]any)
+	if _, ok := metadata["labels"]; ok {
+		t.Fatalf("expected nil labels to be removed by omitempty rule")
+	}
+}
+
+func TestApplyIgnoreRules_OmitEmpty_RemovesEmptyMap(t *testing.T) {
+	t.Parallel()
+
+	rules, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+removeFields:
+  - fields:
+      - path: metadata.labels
+        omitempty: true
+      - path: metadata.annotations
+        omitempty: true
+`))
+	if err != nil {
+		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+	}
+
+	obj := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":        "demo",
+			"namespace":   "default",
+			"labels":      map[string]any{},
+			"annotations": map[string]any{},
+		},
+	}
+
+	applyIgnoreRules(obj, &options{ignoreRules: rules})
+
+	metadata := obj["metadata"].(map[string]any)
+	if _, ok := metadata["labels"]; ok {
+		t.Fatalf("expected empty labels map to be removed by omitempty rule")
+	}
+	if _, ok := metadata["annotations"]; ok {
+		t.Fatalf("expected empty annotations map to be removed by omitempty rule")
+	}
+}
+
+func TestApplyIgnoreRules_OmitEmpty_KeepsNonEmptyField(t *testing.T) {
+	t.Parallel()
+
+	rules, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+removeFields:
+  - fields:
+      - path: metadata.labels
+        omitempty: true
+`))
+	if err != nil {
+		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
+	}
+
+	obj := map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata": map[string]any{
+			"name":      "demo",
+			"namespace": "default",
+			"labels":    map[string]any{"app": "myapp"},
+		},
+	}
+
+	applyIgnoreRules(obj, &options{ignoreRules: rules})
+
+	metadata := obj["metadata"].(map[string]any)
+	labels, ok := metadata["labels"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected non-empty labels to be preserved by omitempty rule")
+	}
+	if labels["app"] != "myapp" {
+		t.Fatalf("expected labels to remain unchanged, got %#v", labels)
+	}
+}
+
+func TestParseIgnoreConfigBytes_OmitEmpty_AndValueAreMutuallyExclusive(t *testing.T) {
+	t.Parallel()
+
+	_, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+removeFields:
+  - fields:
+      - path: metadata.labels
+        value: null
+        omitempty: true
+`))
+	if err == nil {
+		t.Fatal("expected error when both 'value' and 'omitempty' are set in the same field entry")
+	}
+}
+
 func TestWriteYAML_NoIgnoreRulesByDefault(t *testing.T) {
 	t.Parallel()
 

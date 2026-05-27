@@ -12,12 +12,12 @@ removeFields:
       - metadata.annotations.kubectl\.kubernetes\.io/last-applied-configuration
       - metadata.labels.argocd\.argoproj\.io/instance
       - status
-      # Helm charts often render labels/annotations as explicit null when the
-      # chart has no values for them. The API server never returns null here.
+      # Remove empty labels/annotations maps. Helm often renders these as explicit
+      # null; the API server may return {}. Both are noise in source-controlled YAML.
       - path: metadata.labels
-        value: null
+        omitempty: true
       - path: metadata.annotations
-        value: null
+        omitempty: true
   # Namespace-specific noise added by the API server.
   - kind: Namespace
     fields:
