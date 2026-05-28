@@ -68,6 +68,7 @@ type options struct {
 	readYamlFrom          string
 	readResourceNamesFrom string
 	namespacesCSV         string
+	kindFilterCSV         string
 	nameRegex             string
 	skipNameGlob          string
 	excludeNamespacesCSV  string
@@ -75,6 +76,7 @@ type options struct {
 	fileName              string
 	dir                   string
 	namespaceFilter       map[string]struct{}
+	kindFilter            []string
 	nameFilterEnabled     bool
 	nameFilterRegex       *regexp.Regexp
 	ignoreRules           []ignoreRule
@@ -111,10 +113,10 @@ type skipRule struct {
 }
 
 type ignoreRuleFile struct {
-	Group     *string               `yaml:"group"`
-	Kind      *string               `yaml:"kind"`
-	Namespace *string               `yaml:"namespace"`
-	Name      *string               `yaml:"name"`
+	Group     *string                `yaml:"group"`
+	Kind      *string                `yaml:"kind"`
+	Namespace *string                `yaml:"namespace"`
+	Name      *string                `yaml:"name"`
 	Fields    []ignoreFieldEntryFile `yaml:"fields"`
 }
 
@@ -217,6 +219,24 @@ type processingEvent struct {
 	err         error
 }
 
+type fileValue string
+
+func (v *fileValue) String() string     { return string(*v) }
+func (v *fileValue) Set(s string) error { *v = fileValue(s); return nil }
+func (v *fileValue) Type() string       { return "file" }
+
+type dirValue string
+
+func (v *dirValue) String() string     { return string(*v) }
+func (v *dirValue) Set(s string) error { *v = dirValue(s); return nil }
+func (v *dirValue) Type() string       { return "dir" }
+
+type pathValue string
+
+func (v *pathValue) String() string     { return string(*v) }
+func (v *pathValue) Set(s string) error { *v = pathValue(s); return nil }
+func (v *pathValue) Type() string       { return "path" }
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "gendocs" {
 		b := &bytes.Buffer{}
@@ -262,21 +282,22 @@ func main() {
 }
 
 func mainWithError() error {
-	opts := &options{}
-	pflag.StringVarP(&opts.outputDir, "out-dir", "o", "out", "Output directory (must not exist)")
+	opts := &options{outputDir: "out"}
+	pflag.VarP((*dirValue)(&opts.outputDir), "out-dir", "o", "Output directory (must not exist)")
 	pflag.BoolVarP(&opts.quiet, "quiet", "q", false, "Quiet, suppress output")
 	pflag.BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
 	pflag.BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
 	pflag.BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
 	pflag.BoolVarP(&opts.skipOwned, "skip-owned", "O", false, "Skip resources that have a controlling owner reference (e.g., Pods owned by a ReplicaSet) or that Kubernetes autogenerates from other resources (e.g., aggregated ClusterRoles)")
 	pflag.BoolVar(&opts.ignoreConfigUseCommon, "ignore-config-use-common", false, "Use the embedded common ignore config")
-	pflag.StringVar(&opts.ignoreConfigFile, "ignore-config", "", "Path to a YAML file with ignore rules")
+	pflag.Var((*fileValue)(&opts.ignoreConfigFile), "ignore-config", "Path to a YAML file with ignore rules")
 	pflag.StringVarP(&opts.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to dump")
+	pflag.StringVar(&opts.kindFilterCSV, "kind", "", "Comma-separated list of kind globs to dump (e.g. 'ConfigMap,Secret,Cluster*')")
 	pflag.StringVarP(&opts.nameRegex, "name-regex", "x", "", "Only dump resources where metadata.name matches this regex")
 	pflag.StringVar(&opts.skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob (e.g. 'foo-*' skips names starting with 'foo-')")
 	pflag.StringVar(&opts.excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to fully exclude (e.g. 'foo-*,test-*'). Drops the Namespace object plus all resources inside; uses fieldSelector to skip those namespaces api-server-side")
-	pflag.StringVar(&opts.readYamlFrom, "read-yaml-from", "", "Read YAML manifests from a file or directory instead of connecting to the api-server. Useful for normalizing existing YAML files for better diffing.")
-	pflag.StringVar(&opts.readResourceNamesFrom, "read-resource-names-from", "", "Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources.")
+	pflag.Var((*pathValue)(&opts.readYamlFrom), "read-yaml-from", "Read YAML manifests from a file or directory instead of connecting to the api-server. Useful for normalizing existing YAML files for better diffing.")
+	pflag.Var((*pathValue)(&opts.readResourceNamesFrom), "read-resource-names-from", "Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources from the api-server.")
 	pflag.StringVar(&opts.comment, "comment", "", "Additional comment line to add at the top of each output YAML file")
 	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "Alias for --read-yaml-from (hidden)")
 	_ = pflag.CommandLine.MarkHidden("file-name")
@@ -301,6 +322,13 @@ func mainWithError() error {
 	}
 
 	opts.namespaceFilter = namespaceFilter
+
+	kindFilter, err := parseKindFilter(opts.kindFilterCSV)
+	if err != nil {
+		return err
+	}
+
+	opts.kindFilter = kindFilter
 
 	nameFilterRegex, nameFilterEnabled, err := parseNameFilterRegex(opts.nameRegex)
 	if err != nil {
@@ -682,6 +710,10 @@ func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourc
 
 			group := getGroup(apiGroup.GroupVersion)
 			if skipRuleCoversGVR(opts.skipRules, group, resource.Kind) {
+				continue
+			}
+
+			if len(opts.kindFilter) > 0 && !matchesAnyGlob(opts.kindFilter, resource.Kind) {
 				continue
 			}
 
@@ -1418,6 +1450,15 @@ func (r ignoreRule) matches(identity objectIdentity) bool {
 		matchGlob(r.NamePattern, identity.Name)
 }
 
+func matchesAnyGlob(patterns []string, value string) bool {
+	for _, pattern := range patterns {
+		if matchGlob(pattern, value) {
+			return true
+		}
+	}
+	return false
+}
+
 func matchGlob(pattern string, value string) bool {
 	matched, err := path.Match(pattern, value)
 	if err != nil {
@@ -1630,6 +1671,31 @@ func parseNamespaceFilter(namespacesCSV string) (map[string]struct{}, error) {
 	return filter, nil
 }
 
+func parseKindFilter(kindFilterCSV string) ([]string, error) {
+	trimmed := strings.TrimSpace(kindFilterCSV)
+	if trimmed == "" {
+		return nil, nil
+	}
+
+	patterns := make([]string, 0)
+	for _, entry := range strings.Split(trimmed, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if err := validateGlobPattern(entry); err != nil {
+			return nil, fmt.Errorf("invalid --kind glob %q: %w", entry, err)
+		}
+		patterns = append(patterns, entry)
+	}
+
+	if len(patterns) == 0 {
+		return nil, fmt.Errorf("invalid --kind %q: no patterns found", kindFilterCSV)
+	}
+
+	return patterns, nil
+}
+
 func parseNameFilterRegex(nameRegex string) (*regexp.Regexp, bool, error) {
 	trimmed := strings.TrimSpace(nameRegex)
 	if trimmed == "" {
@@ -1767,6 +1833,10 @@ func shouldProcessItem(item *unstructured.Unstructured, isNamespaced bool, opts 
 				return false
 			}
 		}
+	}
+
+	if len(opts.kindFilter) > 0 && !matchesAnyGlob(opts.kindFilter, item.GetKind()) {
+		return false
 	}
 
 	if opts.nameFilterEnabled {
