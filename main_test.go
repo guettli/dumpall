@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -1845,5 +1846,51 @@ func webhookObject() map[string]any {
 		"status": map[string]any{
 			"observedGeneration": int64(2),
 		},
+	}
+}
+
+func TestValidateKindFilterMatchesResources(t *testing.T) {
+	t.Parallel()
+
+	resourceList := []*meta.APIResourceList{
+		{
+			GroupVersion: "v1",
+			APIResources: []meta.APIResource{
+				{Kind: "ConfigMap"},
+				{Kind: "Secret"},
+			},
+		},
+		{
+			GroupVersion: "apps/v1",
+			APIResources: []meta.APIResource{
+				{Kind: "Deployment"},
+			},
+		},
+	}
+
+	tests := []struct {
+		name       string
+		kindFilter []string
+		wantErr    bool
+	}{
+		{name: "empty filter passes", kindFilter: nil, wantErr: false},
+		{name: "exact match passes", kindFilter: []string{"ConfigMap"}, wantErr: false},
+		{name: "glob match passes", kindFilter: []string{"Config*"}, wantErr: false},
+		{name: "multiple kinds one matches", kindFilter: []string{"Deployment", "DoesNotExist"}, wantErr: false},
+		{name: "no match returns error", kindFilter: []string{"asdf"}, wantErr: true},
+		{name: "all no match returns error", kindFilter: []string{"Foo", "Bar"}, wantErr: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateKindFilterMatchesResources(tc.kindFilter, resourceList)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected no error, got: %v", err)
+			}
+		})
 	}
 }

@@ -683,12 +683,32 @@ func validateNamespaceFilter(client dynamic.Interface, opts *options) error {
 	return nil
 }
 
+func validateKindFilterMatchesResources(kindFilter []string, resourceList []*meta.APIResourceList) error {
+	if len(kindFilter) == 0 {
+		return nil
+	}
+
+	for _, apiGroup := range resourceList {
+		for _, resource := range apiGroup.APIResources {
+			if matchesAnyGlob(kindFilter, resource.Kind) {
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("--kind: no resource types found matching: %s (use `kubectl api-resources` to list available kinds)", strings.Join(kindFilter, ", "))
+}
+
 func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourceList, opts *options) error {
 	if err := resolveExcludeNamespaceFieldSelector(client, opts); err != nil {
 		return err
 	}
 
 	if err := validateNamespaceFilter(client, opts); err != nil {
+		return err
+	}
+
+	if err := validateKindFilterMatchesResources(opts.kindFilter, resourceList); err != nil {
 		return err
 	}
 
