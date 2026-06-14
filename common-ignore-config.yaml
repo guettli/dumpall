@@ -10,11 +10,13 @@ removeFields:
       - metadata.annotations.deployment\.kubernetes\.io/revision
       - metadata.annotations.clusterctl\.cluster\.x-k8s\.io
       - metadata.annotations.kubectl\.kubernetes\.io/last-applied-configuration
-      - metadata.annotations.kapp\.k14s\.io/app
-      - metadata.annotations.kapp\.k14s\.io/association
+
       - metadata.annotations.kapp\.k14s\.io/identity
       - metadata.annotations.kapp\.k14s\.io/original-diff-md5
       - metadata.annotations.kapp\.k14s\.io/original
+      - metadata.labels.kapp\.k14s\.io/app
+      - metadata.labels.kapp\.k14s\.io/association
+
       - metadata.labels.argocd\.argoproj\.io/instance
       - status
       # Remove empty labels/annotations maps. Helm often renders these as explicit
