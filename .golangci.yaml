@@ -19,6 +19,7 @@ linters:
     - testpackage
     - thelper
     - varnamelen
+    - gomodguard
     - wsl
   settings:
     cyclop:
@@ -36,6 +37,10 @@ linters:
       - third_party$
       - builtin$
       - examples$
+    rules:
+      - linters:
+          - goconst
+        path: _test\.go
 formatters:
   enable:
     - gci

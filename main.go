@@ -36,13 +36,30 @@ const (
 	redactionMarkerValue   = "REDCATED-BY-DUMPALL"
 	toolNameForUsageOutput = "dumpall"
 	lastAppliedAnnotation  = "kubectl.kubernetes.io/last-applied-configuration"
+
+	kindNamespace      = "Namespace"
+	kindClusterRole    = "ClusterRole"
+	kindServiceAccount = "ServiceAccount"
+	kindConfigMap      = "ConfigMap"
+	kindSecret         = "Secret"
+
+	appsV1            = "apps/v1"
+	rbacGroup         = "rbac.authorization.k8s.io"
+	bootstrappingKey  = "kubernetes.io/bootstrapping"
+	rbacDefaultsValue = "rbac-defaults"
+	kubeRootCAName    = "kube-root-ca.crt"
+
+	fieldMetadata = "metadata"
+	deepWildcard  = "..."
+	fieldRules    = "rules"
+	defaultName   = "default"
 )
 
 //go:embed common-ignore-config.yaml
 var commonIgnoreConfig []byte
 
 var toSkip = map[string][]string{
-	"apps/v1": {"replicasets"},
+	appsV1: {"replicasets"},
 	"authentication.k8s.io/v1": {
 		"selfsubjectreviews", "tokenreviews",
 	},
@@ -140,6 +157,7 @@ func (e *ignoreFieldEntryFile) UnmarshalYAML(value *yaml.Node) error {
 		return nil
 	case yaml.MappingNode:
 		hasValue, hasOmitEmpty := false, false
+
 		for i := 0; i < len(value.Content)-1; i += 2 {
 			key := value.Content[i].Value
 			switch key {
@@ -152,30 +170,40 @@ func (e *ignoreFieldEntryFile) UnmarshalYAML(value *yaml.Node) error {
 				return fmt.Errorf("unknown field %q in field entry (allowed: path, value, omitempty)", key)
 			}
 		}
+
 		if hasValue && hasOmitEmpty {
 			return fmt.Errorf("field entry cannot set both 'value' and 'omitempty'")
 		}
+
 		var m struct {
 			Path      string `yaml:"path"`
 			Value     any    `yaml:"value"`
 			OmitEmpty bool   `yaml:"omitempty"`
 		}
-		if err := value.Decode(&m); err != nil {
-			return err
+
+		err := value.Decode(&m)
+		if err != nil {
+			return fmt.Errorf("failed to decode field entry: %w", err)
 		}
+
 		if m.Path == "" {
 			return fmt.Errorf("field entry map must have a non-empty 'path' key")
 		}
+
 		e.Path = m.Path
 		if hasValue {
 			e.Value = m.Value
 			e.valueConstrained = true
 		}
+
 		e.OmitEmpty = m.OmitEmpty
+
 		return nil
-	default:
+	case yaml.DocumentNode, yaml.SequenceNode, yaml.AliasNode:
 		return fmt.Errorf("field entry must be a string or a map with 'path', 'value', or 'omitempty' keys")
 	}
+
+	return fmt.Errorf("field entry must be a string or a map with 'path', 'value', or 'omitempty' keys")
 }
 
 type ignoreRule struct {
@@ -300,8 +328,11 @@ func mainWithError() error {
 	pflag.Var((*pathValue)(&opts.readResourceNamesFrom), "read-resource-names-from", "Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources from the api-server.")
 	pflag.StringVar(&opts.comment, "comment", "", "Additional comment line to add at the top of each output YAML file")
 	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "Alias for --read-yaml-from (hidden)")
+
 	_ = pflag.CommandLine.MarkHidden("file-name")
+
 	pflag.StringVar(&opts.dir, "dir", "", "Alias for --read-yaml-from (hidden)")
+
 	_ = pflag.CommandLine.MarkHidden("dir")
 
 	pflag.Usage = func() {
@@ -339,20 +370,25 @@ func mainWithError() error {
 	opts.nameFilterRegex = nameFilterRegex
 
 	opts.readYamlFrom = strings.TrimSpace(opts.readYamlFrom)
+
 	opts.dir = strings.TrimSpace(opts.dir)
 	if opts.dir != "" {
 		if opts.readYamlFrom != "" {
 			return fmt.Errorf("--dir and --read-yaml-from are mutually exclusive")
 		}
+
 		opts.readYamlFrom = opts.dir
 	}
+
 	opts.fileName = strings.TrimSpace(opts.fileName)
 	if opts.fileName != "" {
 		if opts.readYamlFrom != "" {
 			return fmt.Errorf("--file-name (-f) and --read-yaml-from are mutually exclusive")
 		}
+
 		opts.readYamlFrom = opts.fileName
 	}
+
 	opts.readResourceNamesFrom = strings.TrimSpace(opts.readResourceNamesFrom)
 
 	ignoreRules, skipRules, excludes, err := loadIgnoreRules(opts.ignoreConfigUseCommon, opts.ignoreConfigFile)
@@ -366,6 +402,7 @@ func mainWithError() error {
 
 	if strings.TrimSpace(opts.skipNameGlob) != "" {
 		pattern := opts.skipNameGlob
+
 		flagRule, err := compileSkipRule(skipRuleFile{Name: &pattern})
 		if err != nil {
 			return fmt.Errorf("invalid --skip-name-glob: %w", err)
@@ -402,6 +439,7 @@ func mainWithError() error {
 		if err != nil {
 			return err
 		}
+
 		opts.resourceNameFilter = filter
 	}
 
@@ -410,9 +448,11 @@ func mainWithError() error {
 		if err != nil {
 			return fmt.Errorf("failed to inspect --read-yaml-from path %q: %w", opts.readYamlFrom, err)
 		}
+
 		if info.IsDir() {
 			return readYamlFromDir(opts.readYamlFrom, opts)
 		}
+
 		return readYamlFromFile(opts.readYamlFrom, opts)
 	}
 
@@ -462,6 +502,7 @@ func readYamlFromFile(fileName string, opts *options) error {
 			events <- processingEvent{
 				err: fmt.Errorf("failed to read file %s: %w", fileName, err),
 			}
+
 			return
 		}
 
@@ -500,6 +541,7 @@ func readYamlFromDir(dirPath string, opts *options) error {
 					events <- processingEvent{
 						err: fmt.Errorf("failed to read file %s: %w", filePath, err),
 					}
+
 					continue
 				}
 
@@ -515,6 +557,7 @@ func readYamlFromDir(dirPath string, opts *options) error {
 		for _, filePath := range yamlFiles {
 			fileJobs <- filePath
 		}
+
 		close(fileJobs)
 	}()
 
@@ -534,6 +577,7 @@ func findYAMLFiles(dirPath string) ([]string, error) {
 	}
 
 	yamlFiles := make([]string, 0)
+
 	err = filepath.WalkDir(dirPath, func(currentPath string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -548,6 +592,7 @@ func findYAMLFiles(dirPath string) ([]string, error) {
 		}
 
 		yamlFiles = append(yamlFiles, currentPath)
+
 		return nil
 	})
 	if err != nil {
@@ -577,6 +622,7 @@ func loadResourceNameFilter(fromPath string) (map[resourceNameKey]struct{}, erro
 	}
 
 	filter := make(map[resourceNameKey]struct{})
+
 	for _, filePath := range filePaths {
 		data, err := os.ReadFile(filePath)
 		if err != nil {
@@ -595,6 +641,7 @@ func loadResourceNameFilter(fromPath string) (map[resourceNameKey]struct{}, erro
 			}
 
 			u := &unstructured.Unstructured{Object: m}
+
 			ns := u.GetNamespace()
 			if ns == "" {
 				ns = clusterNamespace
@@ -632,7 +679,7 @@ func enqueueYAMLBytesAsJobs(bytes []byte, sourceName string, opts *options, jobs
 
 		u := &unstructured.Unstructured{Object: m}
 
-		ns, _, err := unstructured.NestedString(m, "metadata", "namespace")
+		ns, _, err := unstructured.NestedString(m, fieldMetadata, "namespace")
 		if err != nil {
 			return fmt.Errorf("failed to get namespace for item %s in %s: %w", u.GetName(), sourceName, err)
 		}
@@ -669,6 +716,7 @@ func validateNamespaceFilter(client dynamic.Interface, opts *options) error {
 	}
 
 	missing := make([]string, 0)
+
 	for ns := range opts.namespaceFilter {
 		if _, ok := existing[ns]; !ok {
 			missing = append(missing, ns)
@@ -700,15 +748,18 @@ func validateKindFilterMatchesResources(kindFilter []string, resourceList []*met
 }
 
 func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourceList, opts *options) error {
-	if err := resolveExcludeNamespaceFieldSelector(client, opts); err != nil {
+	err := resolveExcludeNamespaceFieldSelector(client, opts)
+	if err != nil {
 		return err
 	}
 
-	if err := validateNamespaceFilter(client, opts); err != nil {
+	err = validateNamespaceFilter(client, opts)
+	if err != nil {
 		return err
 	}
 
-	if err := validateKindFilterMatchesResources(opts.kindFilter, resourceList); err != nil {
+	err = validateKindFilterMatchesResources(opts.kindFilter, resourceList)
+	if err != nil {
 		return err
 	}
 
@@ -717,6 +768,7 @@ func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourc
 	})
 
 	gvrJobs := make([]gvrListJob, 0)
+
 	for _, apiGroup := range resourceList {
 		sort.Slice(apiGroup.APIResources, func(i int, j int) bool {
 			return apiGroup.APIResources[i].Name < apiGroup.APIResources[j].Name
@@ -776,6 +828,7 @@ func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourc
 		for _, job := range gvrJobs {
 			listJobs <- job
 		}
+
 		close(listJobs)
 	}()
 
@@ -800,6 +853,7 @@ func resolveExcludeNamespaceFieldSelector(client dynamic.Interface, opts *option
 	}
 
 	excluded := make([]string, 0)
+
 	for i := range list.Items {
 		name := list.Items[i].GetName()
 		for _, pattern := range opts.excludeNamespaces {
@@ -815,11 +869,13 @@ func resolveExcludeNamespaceFieldSelector(client dynamic.Interface, opts *option
 	}
 
 	parts := make([]string, 0, len(excluded))
+
 	for _, name := range excluded {
-		parts = append(parts, "metadata.namespace!="+name)
+		parts = append(parts, fieldMetadata+".namespace!="+name)
 	}
 
 	opts.excludeFieldSelector = strings.Join(parts, ",")
+
 	return nil
 }
 
@@ -868,6 +924,7 @@ func startWriteWorkers(opts *options) (chan resourceWriteJob, chan processingEve
 					events <- processingEvent{
 						err: fmt.Errorf("failed to process item %s from %s: %w", job.item.GetName(), job.sourceName, err),
 					}
+
 					continue
 				}
 
@@ -922,6 +979,7 @@ func consumeProcessingEvents(events <-chan processingEvent, opts *options) (int6
 			fmt.Println(event.logMessage)
 		case event.writtenFile != "":
 			fileCount++
+
 			if !opts.quiet {
 				fmt.Printf("Written: %s\n", event.writtenFile)
 			}
@@ -936,10 +994,7 @@ func defaultWorkerCount() int {
 }
 
 func boundedWorkerCount(jobCount int) int {
-	workerCount := runtime.GOMAXPROCS(0)
-	if workerCount < 2 {
-		workerCount = 2
-	}
+	workerCount := max(runtime.GOMAXPROCS(0), 2)
 
 	if jobCount > 0 && workerCount > jobCount {
 		return jobCount
@@ -980,7 +1035,7 @@ func processUnstructured(item *unstructured.Unstructured, isNamespaced bool, opt
 }
 
 func writeYAML(filePath string, obj map[string]any, opts *options) error {
-	metadata, ok := obj["metadata"].(map[string]any)
+	metadata, ok := obj[fieldMetadata].(map[string]any)
 	if !ok {
 		return fmt.Errorf("metadata not found in object")
 	}
@@ -1003,6 +1058,7 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 	defer file.Close()
 
 	fmt.Fprintf(file, "# https://github.com/guettli/dumpall version: %s\n", getBuildVersion())
+
 	if opts.comment != "" {
 		fmt.Fprintf(file, "# %s\n", opts.comment)
 	}
@@ -1025,11 +1081,12 @@ func getBuildVersion() string {
 	if !ok {
 		return "unknown"
 	}
+
 	return info.Main.Version
 }
 
 func pruneEmptyMetadataMaps(obj map[string]any) {
-	metadata, ok := obj["metadata"].(map[string]any)
+	metadata, ok := obj[fieldMetadata].(map[string]any)
 	if !ok {
 		return
 	}
@@ -1099,7 +1156,8 @@ func loadIgnoreRules(useCommon bool, userConfigFile string) ([]ignoreRule, []ski
 }
 
 func parseIgnoreConfigBytes(name string, data []byte) ([]ignoreRule, []skipRule, []string, error) {
-	if err := rejectLegacyIgnoreConfigKeys(name, data); err != nil {
+	err := rejectLegacyIgnoreConfigKeys(name, data)
+	if err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -1107,12 +1165,16 @@ func parseIgnoreConfigBytes(name string, data []byte) ([]ignoreRule, []skipRule,
 	decoder.KnownFields(true)
 
 	var cfg ignoreConfig
-	if err := decoder.Decode(&cfg); err != nil {
+
+	err = decoder.Decode(&cfg)
+	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to parse ignore config %s: %w", name, err)
 	}
 
 	var extra any
-	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+
+	err = decoder.Decode(&extra)
+	if !errors.Is(err, io.EOF) {
 		if err == nil {
 			return nil, nil, nil, fmt.Errorf("failed to parse ignore config %s: expected a single YAML document", name)
 		}
@@ -1155,6 +1217,7 @@ func parseExcludeNamespacesCSV(csv string) ([]string, error) {
 	}
 
 	patterns := make([]string, 0)
+
 	for _, entry := range strings.Split(csv, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
@@ -1179,7 +1242,8 @@ func validateExcludeNamespacePatterns(source string, patterns []string) ([]strin
 			return nil, fmt.Errorf("invalid excludeNamespaces entry %d in %s: empty pattern", idx+1, source)
 		}
 
-		if err := validateGlobPattern(trimmed); err != nil {
+		err := validateGlobPattern(trimmed)
+		if err != nil {
 			return nil, fmt.Errorf("invalid excludeNamespaces entry %d in %s: invalid glob %q: %w", idx+1, source, trimmed, err)
 		}
 
@@ -1203,11 +1267,12 @@ func compileIgnoreRule(fileRule ignoreRuleFile) (ignoreRule, error) {
 		}
 
 		for _, segment := range segments {
-			if segment == "..." || !hasFieldSegmentWildcard(segment) {
+			if segment == deepWildcard || !hasFieldSegmentWildcard(segment) {
 				continue
 			}
 
-			if err := validateGlobPattern(segment); err != nil {
+			err := validateGlobPattern(segment)
+			if err != nil {
 				return ignoreRule{}, fmt.Errorf("invalid field path %q: invalid segment glob %q: %w", trimmed, segment, err)
 			}
 		}
@@ -1225,22 +1290,30 @@ func compileIgnoreRule(fileRule ignoreRuleFile) (ignoreRule, error) {
 	}
 
 	groupPattern := patternOrWildcard(fileRule.Group)
-	if err := validateGlobPattern(groupPattern); err != nil {
+
+	err := validateGlobPattern(groupPattern)
+	if err != nil {
 		return ignoreRule{}, fmt.Errorf("invalid group glob %q: %w", groupPattern, err)
 	}
 
 	kindPattern := patternOrWildcard(fileRule.Kind)
-	if err := validateGlobPattern(kindPattern); err != nil {
+
+	err = validateGlobPattern(kindPattern)
+	if err != nil {
 		return ignoreRule{}, fmt.Errorf("invalid kind glob %q: %w", kindPattern, err)
 	}
 
 	namespacePattern := patternOrWildcard(fileRule.Namespace)
-	if err := validateGlobPattern(namespacePattern); err != nil {
+
+	err = validateGlobPattern(namespacePattern)
+	if err != nil {
 		return ignoreRule{}, fmt.Errorf("invalid namespace glob %q: %w", namespacePattern, err)
 	}
 
 	namePattern := patternOrWildcard(fileRule.Name)
-	if err := validateGlobPattern(namePattern); err != nil {
+
+	err = validateGlobPattern(namePattern)
+	if err != nil {
 		return ignoreRule{}, fmt.Errorf("invalid name glob %q: %w", namePattern, err)
 	}
 
@@ -1258,22 +1331,20 @@ func compileIgnoreRule(fileRule ignoreRuleFile) (ignoreRule, error) {
 // of the generic "field not found in type" error from strict parsing.
 func rejectLegacyIgnoreConfigKeys(name string, data []byte) error {
 	var preview map[string]any
-	if err := yaml.Unmarshal(data, &preview); err != nil {
-		// Let the strict parser surface the real error.
-		return nil
-	}
 
-	legacy := []struct {
-		oldKey string
-		newKey string
-	}{
-		{"rules", "removeFields"},
-		{"skip", "skipResources"},
-	}
+	if yaml.Unmarshal(data, &preview) == nil {
+		legacy := []struct {
+			oldKey string
+			newKey string
+		}{
+			{fieldRules, "removeFields"},
+			{"skip", "skipResources"},
+		}
 
-	for _, entry := range legacy {
-		if _, ok := preview[entry.oldKey]; ok {
-			return fmt.Errorf("ignore config %s uses legacy key %q — rename it to %q", name, entry.oldKey, entry.newKey)
+		for _, entry := range legacy {
+			if _, ok := preview[entry.oldKey]; ok {
+				return fmt.Errorf("ignore config %s uses legacy key %q — rename it to %q", name, entry.oldKey, entry.newKey)
+			}
 		}
 	}
 
@@ -1286,22 +1357,30 @@ func compileSkipRule(fileRule skipRuleFile) (skipRule, error) {
 	}
 
 	groupPattern := patternOrWildcard(fileRule.Group)
-	if err := validateGlobPattern(groupPattern); err != nil {
+
+	err := validateGlobPattern(groupPattern)
+	if err != nil {
 		return skipRule{}, fmt.Errorf("invalid group glob %q: %w", groupPattern, err)
 	}
 
 	kindPattern := patternOrWildcard(fileRule.Kind)
-	if err := validateGlobPattern(kindPattern); err != nil {
+
+	err = validateGlobPattern(kindPattern)
+	if err != nil {
 		return skipRule{}, fmt.Errorf("invalid kind glob %q: %w", kindPattern, err)
 	}
 
 	namespacePattern := patternOrWildcard(fileRule.Namespace)
-	if err := validateGlobPattern(namespacePattern); err != nil {
+
+	err = validateGlobPattern(namespacePattern)
+	if err != nil {
 		return skipRule{}, fmt.Errorf("invalid namespace glob %q: %w", namespacePattern, err)
 	}
 
 	namePattern := patternOrWildcard(fileRule.Name)
-	if err := validateGlobPattern(namePattern); err != nil {
+
+	err = validateGlobPattern(namePattern)
+	if err != nil {
 		return skipRule{}, fmt.Errorf("invalid name glob %q: %w", namePattern, err)
 	}
 
@@ -1359,12 +1438,18 @@ func patternOrWildcard(value *string) string {
 
 func validateGlobPattern(pattern string) error {
 	_, err := path.Match(pattern, "")
-	return err
+	if err != nil {
+		return fmt.Errorf("invalid glob pattern: %w", err)
+	}
+
+	return nil
 }
 
 func parseIgnoreFieldPath(fieldPath string) ([]string, error) {
 	var segments []string
+
 	var current strings.Builder
+
 	escaped := false
 
 	for i := 0; i < len(fieldPath); i++ {
@@ -1373,16 +1458,17 @@ func parseIgnoreFieldPath(fieldPath string) ([]string, error) {
 		switch {
 		case escaped:
 			current.WriteByte(r)
+
 			escaped = false
 		case r == '\\':
 			escaped = true
-		case fieldPath[i:] == "..." || strings.HasPrefix(fieldPath[i:], "..."):
+		case fieldPath[i:] == deepWildcard || strings.HasPrefix(fieldPath[i:], deepWildcard):
 			if current.Len() > 0 {
 				segments = append(segments, current.String())
 				current.Reset()
 			}
 
-			segments = append(segments, "...")
+			segments = append(segments, deepWildcard)
 			i += 2
 		case r == '.':
 			if current.Len() == 0 {
@@ -1401,8 +1487,8 @@ func parseIgnoreFieldPath(fieldPath string) ([]string, error) {
 	}
 
 	if current.Len() == 0 {
-		if len(segments) > 0 && segments[len(segments)-1] == "..." {
-			return nil, fmt.Errorf("path must not end with ...")
+		if len(segments) > 0 && segments[len(segments)-1] == deepWildcard {
+			return nil, fmt.Errorf("path must not end with the '...' wildcard segment")
 		}
 
 		return nil, fmt.Errorf("empty path segment")
@@ -1436,6 +1522,7 @@ func applyIgnoreRules(obj map[string]any, opts *options) {
 
 func objectIdentityFromObject(obj map[string]any) objectIdentity {
 	u := &unstructured.Unstructured{Object: obj}
+
 	namespace := u.GetNamespace()
 	if namespace == "" {
 		namespace = clusterNamespace
@@ -1476,6 +1563,7 @@ func matchesAnyGlob(patterns []string, value string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -1489,7 +1577,7 @@ func matchGlob(pattern string, value string) bool {
 }
 
 func isManagedFieldsPath(segments []string) bool {
-	return len(segments) == 2 && segments[0] == "metadata" && segments[1] == "managedFields"
+	return len(segments) == 2 && segments[0] == fieldMetadata && segments[1] == "managedFields"
 }
 
 func deleteFieldPath(current any, segments []string, constraintValue any, constrained bool, omitEmpty bool) {
@@ -1497,7 +1585,7 @@ func deleteFieldPath(current any, segments []string, constraintValue any, constr
 		return
 	}
 
-	if segments[0] == "..." {
+	if segments[0] == deepWildcard {
 		deleteFieldPathRecursive(current, segments[1:], constraintValue, constrained, omitEmpty)
 		return
 	}
@@ -1549,17 +1637,26 @@ func deleteFieldPathRecursive(current any, remaining []string, constraintValue a
 	}
 }
 
+func shouldDeleteEntry(value, constraintValue any, constrained, omitEmpty bool) bool {
+	if constrained && !valueMatches(value, constraintValue) {
+		return false
+	}
+
+	if omitEmpty && !isEmpty(value) {
+		return false
+	}
+
+	return true
+}
+
 func deleteFieldPathFromMap(current map[string]any, segments []string, constraintValue any, constrained bool, omitEmpty bool) {
 	keyPattern := segments[0]
 	if !hasFieldSegmentWildcard(keyPattern) {
 		if len(segments) == 1 {
-			if constrained && !valueMatches(current[keyPattern], constraintValue) {
-				return
+			if shouldDeleteEntry(current[keyPattern], constraintValue, constrained, omitEmpty) {
+				delete(current, keyPattern)
 			}
-			if omitEmpty && !isEmpty(current[keyPattern]) {
-				return
-			}
-			delete(current, keyPattern)
+
 			return
 		}
 
@@ -1569,6 +1666,7 @@ func deleteFieldPathFromMap(current map[string]any, segments []string, constrain
 		}
 
 		deleteFieldPath(next, segments[1:], constraintValue, constrained, omitEmpty)
+
 		return
 	}
 
@@ -1578,13 +1676,10 @@ func deleteFieldPathFromMap(current map[string]any, segments []string, constrain
 		}
 
 		if len(segments) == 1 {
-			if constrained && !valueMatches(current[key], constraintValue) {
-				continue
+			if shouldDeleteEntry(current[key], constraintValue, constrained, omitEmpty) {
+				delete(current, key)
 			}
-			if omitEmpty && !isEmpty(current[key]) {
-				continue
-			}
-			delete(current, key)
+
 			continue
 		}
 
@@ -1599,34 +1694,22 @@ func deleteFieldPathFromStringMap(current map[string]string, segments []string, 
 
 	keyPattern := segments[0]
 	if !hasFieldSegmentWildcard(keyPattern) {
-		if constrained && !valueMatches(current[keyPattern], constraintValue) {
-			return
+		if shouldDeleteEntry(current[keyPattern], constraintValue, constrained, omitEmpty) {
+			delete(current, keyPattern)
 		}
-		if omitEmpty && !isEmpty(current[keyPattern]) {
-			return
-		}
-		delete(current, keyPattern)
+
 		return
 	}
 
 	for key := range current {
-		if matchGlob(keyPattern, key) {
-			if constrained && !valueMatches(current[key], constraintValue) {
-				continue
-			}
-			if omitEmpty && !isEmpty(current[key]) {
-				continue
-			}
+		if matchGlob(keyPattern, key) && shouldDeleteEntry(current[key], constraintValue, constrained, omitEmpty) {
 			delete(current, key)
 		}
 	}
 }
 
 func valueMatches(actual, expected any) bool {
-	if fmt.Sprintf("%v", actual) == fmt.Sprintf("%v", expected) {
-		return true
-	}
-	return false
+	return fmt.Sprintf("%v", actual) == fmt.Sprintf("%v", expected)
 }
 
 // isEmpty reports whether v is absent or empty, mirroring json:",omitempty" semantics:
@@ -1635,6 +1718,7 @@ func isEmpty(v any) bool {
 	if v == nil {
 		return true
 	}
+
 	switch typed := v.(type) {
 	case string:
 		return typed == ""
@@ -1698,14 +1782,18 @@ func parseKindFilter(kindFilterCSV string) ([]string, error) {
 	}
 
 	patterns := make([]string, 0)
+
 	for _, entry := range strings.Split(trimmed, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
 		}
-		if err := validateGlobPattern(entry); err != nil {
+
+		err := validateGlobPattern(entry)
+		if err != nil {
 			return nil, fmt.Errorf("invalid --kind glob %q: %w", entry, err)
 		}
+
 		patterns = append(patterns, entry)
 	}
 
@@ -1740,10 +1828,11 @@ func matchesExcludedNamespace(item *unstructured.Unstructured, isNamespaced bool
 	}
 
 	target := ""
+
 	switch {
 	case isNamespaced:
 		target = item.GetNamespace()
-	case item.GetKind() == "Namespace" && getGroup(item.GetAPIVersion()) == "":
+	case item.GetKind() == kindNamespace && getGroup(item.GetAPIVersion()) == "":
 		target = item.GetName()
 	}
 
@@ -1786,7 +1875,7 @@ func isAutogeneratedByKubernetes(item *unstructured.Unstructured) bool {
 // ClusterRoles via `aggregationRule.clusterRoleSelectors`.
 func isAggregatedClusterRole(item *unstructured.Unstructured) bool {
 	gvk := item.GroupVersionKind()
-	if gvk.Group != "rbac.authorization.k8s.io" || gvk.Kind != "ClusterRole" {
+	if gvk.Group != rbacGroup || gvk.Kind != kindClusterRole {
 		return false
 	}
 
@@ -1803,11 +1892,11 @@ func isAggregatedClusterRole(item *unstructured.Unstructured) bool {
 // label `kubernetes.io/bootstrapping=rbac-defaults` and are reconciled by the
 // apiserver on every start, so user edits get overwritten.
 func isRBACBootstrapResource(item *unstructured.Unstructured) bool {
-	if item.GroupVersionKind().Group != "rbac.authorization.k8s.io" {
+	if item.GroupVersionKind().Group != rbacGroup {
 		return false
 	}
 
-	return item.GetLabels()["kubernetes.io/bootstrapping"] == "rbac-defaults"
+	return item.GetLabels()[bootstrappingKey] == rbacDefaultsValue
 }
 
 // isDefaultServiceAccount reports whether the item is the `default`
@@ -1815,7 +1904,7 @@ func isRBACBootstrapResource(item *unstructured.Unstructured) bool {
 // namespace.
 func isDefaultServiceAccount(item *unstructured.Unstructured) bool {
 	gvk := item.GroupVersionKind()
-	return gvk.Group == "" && gvk.Kind == "ServiceAccount" && item.GetName() == "default"
+	return gvk.Group == "" && gvk.Kind == kindServiceAccount && item.GetName() == defaultName
 }
 
 // isKubeRootCAConfigMap reports whether the item is the `kube-root-ca.crt`
@@ -1823,7 +1912,7 @@ func isDefaultServiceAccount(item *unstructured.Unstructured) bool {
 // namespace.
 func isKubeRootCAConfigMap(item *unstructured.Unstructured) bool {
 	gvk := item.GroupVersionKind()
-	return gvk.Group == "" && gvk.Kind == "ConfigMap" && item.GetName() == "kube-root-ca.crt"
+	return gvk.Group == "" && gvk.Kind == kindConfigMap && item.GetName() == kubeRootCAName
 }
 
 func shouldProcessItem(item *unstructured.Unstructured, isNamespaced bool, opts *options) bool {
@@ -1832,6 +1921,7 @@ func shouldProcessItem(item *unstructured.Unstructured, isNamespaced bool, opts 
 		if !isNamespaced || ns == "" {
 			ns = clusterNamespace
 		}
+
 		key := resourceNameKey{Kind: item.GetKind(), Namespace: ns, Name: item.GetName()}
 		if _, ok := opts.resourceNameFilter[key]; !ok {
 			return false
@@ -1874,7 +1964,7 @@ func shouldProcessItem(item *unstructured.Unstructured, isNamespaced bool, opts 
 		return ok
 	}
 
-	if item.GetKind() == "Namespace" {
+	if item.GetKind() == kindNamespace {
 		_, ok := opts.namespaceFilter[item.GetName()]
 		return ok
 	}
@@ -1902,7 +1992,7 @@ var secretAPIGroupRegex = regexp.MustCompile(`^v\d+`)
 
 func isCoreV1Secret(obj map[string]any) bool {
 	kind, _ := obj["kind"].(string)
-	if kind != "Secret" {
+	if kind != kindSecret {
 		return false
 	}
 
@@ -1932,7 +2022,7 @@ func redactSecretField(obj map[string]any, field string) {
 }
 
 func redactSecretAnnotations(obj map[string]any) {
-	metadata, ok := obj["metadata"].(map[string]any)
+	metadata, ok := obj[fieldMetadata].(map[string]any)
 	if !ok {
 		return
 	}

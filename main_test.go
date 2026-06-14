@@ -12,6 +12,29 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+const (
+	testAPIVersion       = "apiVersion"
+	testKindField        = "kind"
+	testNameField        = "name"
+	testAnnotField       = "annotations"
+	testLabelsField      = "labels"
+	testSpecField        = "spec"
+	testStatusField      = "status"
+	testUIDField         = "uid"
+	testControllerField  = "controller"
+	rbacV1GroupVersion   = "rbac.authorization.k8s.io/v1"
+	testAggRuleField     = "aggregationRule"
+	testCRSelectorsField = "clusterRoleSelectors"
+	testKindDeployment   = "Deployment"
+	testFooPattern       = "foo-*"
+	testNameDemo         = "demo"
+	testLabelKeep        = "keep"
+	testLabelRemove      = "remove"
+	testProgressDLS      = "progressDeadlineSeconds"
+	testAnnotRevision    = "deployment.kubernetes.io/revision"
+	testAnnotClusterctl  = "clusterctl.cluster.x-k8s.io"
+)
+
 func TestWriteYAML_RedactsSecretDataAndRemovesLastAppliedAnnotation(t *testing.T) {
 	t.Parallel()
 
@@ -84,7 +107,17 @@ func TestWriteYAML_PrunesEmptyAnnotationsAfterRedaction(t *testing.T) {
 
 	fixtureValue := "fixture-redaction-target-3"
 	obj := secretObject(fixtureValue)
-	annotations := obj["metadata"].(map[string]any)["annotations"].(map[string]any)
+
+	metadataMap, ok := obj[fieldMetadata].(map[string]any)
+	if !ok {
+		t.Fatal("expected metadata to be map[string]any")
+	}
+
+	annotations, ok := metadataMap[testAnnotField].(map[string]any)
+	if !ok {
+		t.Fatal("expected annotations to be map[string]any")
+	}
+
 	delete(annotations, "other")
 
 	outFile := filepath.Join(t.TempDir(), "secret.yaml")
@@ -111,14 +144,14 @@ func TestPruneEmptyMetadataMaps_RemovesOnlyAnnotationsAndLabels(t *testing.T) {
 	t.Parallel()
 
 	obj := map[string]any{
-		"metadata": map[string]any{
-			"annotations": map[string]any{},
-			"labels":      map[string]any{},
+		fieldMetadata: map[string]any{
+			testAnnotField:  map[string]any{},
+			testLabelsField: map[string]any{},
 		},
 		"webhooks": []any{
 			map[string]any{
 				"namespaceSelector": map[string]any{},
-				"rules": []any{
+				fieldRules: []any{
 					map[string]any{},
 					map[string]any{
 						"operations": []any{"CREATE"},
@@ -130,22 +163,38 @@ func TestPruneEmptyMetadataMaps_RemovesOnlyAnnotationsAndLabels(t *testing.T) {
 
 	pruneEmptyMetadataMaps(obj)
 
-	metadata := obj["metadata"].(map[string]any)
-	if _, ok := metadata["annotations"]; ok {
+	metadata, ok := obj[fieldMetadata].(map[string]any)
+	if !ok {
+		t.Fatal("expected metadata to be map[string]any")
+	}
+
+	if _, ok := metadata[testAnnotField]; ok {
 		t.Fatalf("expected empty annotations map to be pruned")
 	}
 
-	if _, ok := metadata["labels"]; ok {
+	if _, ok := metadata[testLabelsField]; ok {
 		t.Fatalf("expected empty labels map to be pruned")
 	}
 
-	webhooks := obj["webhooks"].([]any)
-	webhook := webhooks[0].(map[string]any)
+	webhooks, ok := obj["webhooks"].([]any)
+	if !ok {
+		t.Fatal("expected webhooks to be []any")
+	}
+
+	webhook, ok := webhooks[0].(map[string]any)
+	if !ok {
+		t.Fatal("expected webhook to be map[string]any")
+	}
+
 	if _, ok := webhook["namespaceSelector"]; !ok {
 		t.Fatalf("expected empty namespaceSelector map to be preserved; schema-blind pruning is unsafe because empty maps can be semantic Kubernetes values")
 	}
 
-	rules := webhook["rules"].([]any)
+	rules, ok := webhook[fieldRules].([]any)
+	if !ok {
+		t.Fatal("expected rules to be []any")
+	}
+
 	if len(rules) != 2 {
 		t.Fatalf("expected empty map entries in lists to be preserved; schema-blind pruning is unsafe because empty maps can be semantic Kubernetes values")
 	}
@@ -155,44 +204,44 @@ func TestWriteYAML_PreservesCRDStatusSubresources(t *testing.T) {
 	t.Parallel()
 
 	obj := map[string]any{
-		"apiVersion": "apiextensions.k8s.io/v1",
-		"kind":       "CustomResourceDefinition",
-		"metadata": map[string]any{
-			"name": "extensionconfigs.runtime.cluster.x-k8s.io",
+		testAPIVersion: "apiextensions.k8s.io/v1",
+		testKindField:  "CustomResourceDefinition",
+		fieldMetadata: map[string]any{
+			testNameField: "extensionconfigs.runtime.cluster.x-k8s.io",
 		},
-		"spec": map[string]any{
+		testSpecField: map[string]any{
 			"group": "runtime.cluster.x-k8s.io",
 			"names": map[string]any{
-				"kind":     "ExtensionConfig",
-				"plural":   "extensionconfigs",
-				"singular": "extensionconfig",
+				testKindField: "ExtensionConfig",
+				"plural":      "extensionconfigs",
+				"singular":    "extensionconfig",
 			},
 			"scope": "Cluster",
 			"versions": []any{
 				map[string]any{
-					"name":    "v1alpha1",
-					"served":  true,
-					"storage": false,
+					testNameField: "v1alpha1",
+					"served":      true,
+					"storage":     false,
 					"schema": map[string]any{
 						"openAPIV3Schema": map[string]any{
 							"type": "object",
 						},
 					},
 					"subresources": map[string]any{
-						"status": map[string]any{},
+						testStatusField: map[string]any{},
 					},
 				},
 				map[string]any{
-					"name":    "v1beta2",
-					"served":  true,
-					"storage": true,
+					testNameField: "v1beta2",
+					"served":      true,
+					"storage":     true,
 					"schema": map[string]any{
 						"openAPIV3Schema": map[string]any{
 							"type": "object",
 						},
 					},
 					"subresources": map[string]any{
-						"status": map[string]any{},
+						testStatusField: map[string]any{},
 					},
 				},
 			},
@@ -202,7 +251,8 @@ func TestWriteYAML_PreservesCRDStatusSubresources(t *testing.T) {
 	outFile := filepath.Join(t.TempDir(), "crd.yaml")
 	opts := &options{quiet: true}
 
-	if err := writeYAML(outFile, obj, opts); err != nil {
+	err := writeYAML(outFile, obj, opts)
+	if err != nil {
 		t.Fatalf("writeYAML returned error: %v", err)
 	}
 
@@ -219,13 +269,13 @@ func TestWriteYAML_PreservesCRDStatusSubresources(t *testing.T) {
 
 func secretObject(fixtureValue string) map[string]any {
 	return map[string]any{
-		"apiVersion": "v1",
-		"kind":       "Secret",
-		"metadata": map[string]any{
-			"name":      "my-secret",
-			"namespace": "default",
-			"annotations": map[string]any{
-				lastAppliedAnnotation: `{"apiVersion":"v1","kind":"Secret","data":{"password":"` + fixtureValue + `"}}`,
+		testAPIVersion: "v1",
+		testKindField:  "Secret",
+		fieldMetadata: map[string]any{
+			testNameField: "my-secret",
+			"namespace":   "default",
+			testAnnotField: map[string]any{
+				lastAppliedAnnotation: `{testAPIVersion:"v1",testKindField:"Secret","data":{"password":"` + fixtureValue + `"}}`,
 				"other":               "keep-me",
 			},
 		},
@@ -320,6 +370,7 @@ func TestReadYamlFromDir_RecursiveAndAppliesIgnoreRules(t *testing.T) {
 	t.Parallel()
 
 	inputDir := filepath.Join(t.TempDir(), "input")
+
 	err := os.MkdirAll(filepath.Join(inputDir, "nested"), 0o755)
 	if err != nil {
 		t.Fatalf("create input dir: %v", err)
@@ -383,6 +434,7 @@ removeFields:
 	}
 
 	configMapOut := filepath.Join(outputDir, "alpha", "ConfigMap", "cfg.yaml")
+
 	configMapBytes, err := os.ReadFile(configMapOut)
 	if err != nil {
 		t.Fatalf("read configmap output: %v", err)
@@ -398,7 +450,9 @@ removeFields:
 	}
 
 	namespaceOut := filepath.Join(outputDir, clusterNamespace, "Namespace", "alpha.yaml")
-	if _, err := os.Stat(namespaceOut); err != nil {
+
+	_, err = os.Stat(namespaceOut)
+	if err != nil {
 		t.Fatalf("expected namespace output file, got error: %v", err)
 	}
 }
@@ -516,10 +570,10 @@ func TestShouldProcessItem_SkipOwned(t *testing.T) {
 	controllerFalse := false
 
 	tests := []struct {
-		name       string
-		owners     []any
-		skipOwned  bool
-		want       bool
+		name      string
+		owners    []any
+		skipOwned bool
+		want      bool
 	}{
 		{
 			name:      "no owner references, skipOwned on",
@@ -531,11 +585,11 @@ func TestShouldProcessItem_SkipOwned(t *testing.T) {
 			name: "non-controlling owner reference, skipOwned on",
 			owners: []any{
 				map[string]any{
-					"apiVersion": "v1",
-					"kind":       "Namespace",
-					"name":       "default",
-					"uid":        "uid-ns",
-					"controller": controllerFalse,
+					testAPIVersion:      "v1",
+					testKindField:       "Namespace",
+					testNameField:       "default",
+					testUIDField:        "uid-ns",
+					testControllerField: controllerFalse,
 				},
 			},
 			skipOwned: true,
@@ -545,10 +599,10 @@ func TestShouldProcessItem_SkipOwned(t *testing.T) {
 			name: "owner reference without controller field, skipOwned on",
 			owners: []any{
 				map[string]any{
-					"apiVersion": "v1",
-					"kind":       "Namespace",
-					"name":       "default",
-					"uid":        "uid-ns",
+					testAPIVersion: "v1",
+					testKindField:  "Namespace",
+					testNameField:  "default",
+					testUIDField:   "uid-ns",
 				},
 			},
 			skipOwned: true,
@@ -558,11 +612,11 @@ func TestShouldProcessItem_SkipOwned(t *testing.T) {
 			name: "controlling owner reference, skipOwned on",
 			owners: []any{
 				map[string]any{
-					"apiVersion": "apps/v1",
-					"kind":       "ReplicaSet",
-					"name":       "my-rs",
-					"uid":        "uid-rs",
-					"controller": controllerTrue,
+					testAPIVersion:      "apps/v1",
+					testKindField:       "ReplicaSet",
+					testNameField:       "my-rs",
+					testUIDField:        "uid-rs",
+					testControllerField: controllerTrue,
 				},
 			},
 			skipOwned: true,
@@ -572,11 +626,11 @@ func TestShouldProcessItem_SkipOwned(t *testing.T) {
 			name: "controlling owner reference, skipOwned off",
 			owners: []any{
 				map[string]any{
-					"apiVersion": "apps/v1",
-					"kind":       "ReplicaSet",
-					"name":       "my-rs",
-					"uid":        "uid-rs",
-					"controller": controllerTrue,
+					testAPIVersion:      "apps/v1",
+					testKindField:       "ReplicaSet",
+					testNameField:       "my-rs",
+					testUIDField:        "uid-rs",
+					testControllerField: controllerTrue,
 				},
 			},
 			skipOwned: false,
@@ -592,7 +646,12 @@ func TestShouldProcessItem_SkipOwned(t *testing.T) {
 
 			item := newObject("Pod", "p", "default")
 			if tc.owners != nil {
-				item.Object["metadata"].(map[string]any)["ownerReferences"] = tc.owners
+				metadataAny, ok := item.Object[fieldMetadata].(map[string]any)
+				if !ok {
+					t.Fatal("expected metadata to be map[string]any")
+				}
+
+				metadataAny["ownerReferences"] = tc.owners
 			}
 
 			opts := &options{skipOwned: tc.skipOwned}
@@ -617,11 +676,11 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "aggregated ClusterRole, skipOwned on",
 			obj: map[string]any{
-				"apiVersion": "rbac.authorization.k8s.io/v1",
-				"kind":       "ClusterRole",
-				"metadata":   map[string]any{"name": "admin"},
-				"aggregationRule": map[string]any{
-					"clusterRoleSelectors": []any{
+				testAPIVersion: rbacV1GroupVersion,
+				testKindField:  "ClusterRole",
+				fieldMetadata:  map[string]any{testNameField: "admin"},
+				testAggRuleField: map[string]any{
+					testCRSelectorsField: []any{
 						map[string]any{
 							"matchLabels": map[string]any{
 								"rbac.authorization.k8s.io/aggregate-to-admin": "true",
@@ -636,11 +695,11 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "aggregated ClusterRole, skipOwned off",
 			obj: map[string]any{
-				"apiVersion": "rbac.authorization.k8s.io/v1",
-				"kind":       "ClusterRole",
-				"metadata":   map[string]any{"name": "admin"},
-				"aggregationRule": map[string]any{
-					"clusterRoleSelectors": []any{},
+				testAPIVersion: rbacV1GroupVersion,
+				testKindField:  "ClusterRole",
+				fieldMetadata:  map[string]any{testNameField: "admin"},
+				testAggRuleField: map[string]any{
+					testCRSelectorsField: []any{},
 				},
 			},
 			skipOwned: false,
@@ -649,10 +708,10 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "plain ClusterRole without aggregationRule, skipOwned on",
 			obj: map[string]any{
-				"apiVersion": "rbac.authorization.k8s.io/v1",
-				"kind":       "ClusterRole",
-				"metadata":   map[string]any{"name": "view"},
-				"rules":      []any{},
+				testAPIVersion: rbacV1GroupVersion,
+				testKindField:  "ClusterRole",
+				fieldMetadata:  map[string]any{testNameField: "view"},
+				fieldRules:     []any{},
 			},
 			skipOwned: true,
 			want:      true,
@@ -660,10 +719,10 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "ClusterRole with empty aggregationRule map, skipOwned on",
 			obj: map[string]any{
-				"apiVersion":      "rbac.authorization.k8s.io/v1",
-				"kind":            "ClusterRole",
-				"metadata":        map[string]any{"name": "view"},
-				"aggregationRule": map[string]any{},
+				testAPIVersion:   rbacV1GroupVersion,
+				testKindField:    "ClusterRole",
+				fieldMetadata:    map[string]any{testNameField: "view"},
+				testAggRuleField: map[string]any{},
 			},
 			skipOwned: true,
 			want:      true,
@@ -671,10 +730,10 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "non-ClusterRole with aggregationRule field, skipOwned on",
 			obj: map[string]any{
-				"apiVersion":      "v1",
-				"kind":            "ConfigMap",
-				"metadata":        map[string]any{"name": "cfg", "namespace": "default"},
-				"aggregationRule": map[string]any{"clusterRoleSelectors": []any{}},
+				testAPIVersion:   "v1",
+				testKindField:    "ConfigMap",
+				fieldMetadata:    map[string]any{testNameField: "cfg", "namespace": "default"},
+				testAggRuleField: map[string]any{testCRSelectorsField: []any{}},
 			},
 			skipOwned: true,
 			want:      true,
@@ -682,11 +741,11 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "RBAC bootstrap ClusterRole, skipOwned on",
 			obj: map[string]any{
-				"apiVersion": "rbac.authorization.k8s.io/v1",
-				"kind":       "ClusterRole",
-				"metadata": map[string]any{
-					"name": "system:basic-user",
-					"labels": map[string]any{
+				testAPIVersion: rbacV1GroupVersion,
+				testKindField:  "ClusterRole",
+				fieldMetadata: map[string]any{
+					testNameField: "system:basic-user",
+					testLabelsField: map[string]any{
 						"kubernetes.io/bootstrapping": "rbac-defaults",
 					},
 				},
@@ -697,12 +756,12 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "RBAC bootstrap RoleBinding, skipOwned on",
 			obj: map[string]any{
-				"apiVersion": "rbac.authorization.k8s.io/v1",
-				"kind":       "RoleBinding",
-				"metadata": map[string]any{
-					"name":      "system:controller:bootstrap-signer",
-					"namespace": "kube-public",
-					"labels": map[string]any{
+				testAPIVersion: rbacV1GroupVersion,
+				testKindField:  "RoleBinding",
+				fieldMetadata: map[string]any{
+					testNameField: "system:controller:bootstrap-signer",
+					"namespace":   "kube-public",
+					testLabelsField: map[string]any{
 						"kubernetes.io/bootstrapping": "rbac-defaults",
 					},
 				},
@@ -713,12 +772,12 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "ConfigMap with bootstrap label is not RBAC, skipOwned on",
 			obj: map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata": map[string]any{
-					"name":      "cfg",
-					"namespace": "default",
-					"labels": map[string]any{
+				testAPIVersion: "v1",
+				testKindField:  "ConfigMap",
+				fieldMetadata: map[string]any{
+					testNameField: "cfg",
+					"namespace":   "default",
+					testLabelsField: map[string]any{
 						"kubernetes.io/bootstrapping": "rbac-defaults",
 					},
 				},
@@ -729,9 +788,9 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "default ServiceAccount, skipOwned on",
 			obj: map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ServiceAccount",
-				"metadata":   map[string]any{"name": "default", "namespace": "default"},
+				testAPIVersion: "v1",
+				testKindField:  "ServiceAccount",
+				fieldMetadata:  map[string]any{testNameField: "default", "namespace": "default"},
 			},
 			skipOwned: true,
 			want:      false,
@@ -739,9 +798,9 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "non-default ServiceAccount, skipOwned on",
 			obj: map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ServiceAccount",
-				"metadata":   map[string]any{"name": "my-sa", "namespace": "default"},
+				testAPIVersion: "v1",
+				testKindField:  "ServiceAccount",
+				fieldMetadata:  map[string]any{testNameField: "my-sa", "namespace": "default"},
 			},
 			skipOwned: true,
 			want:      true,
@@ -749,9 +808,9 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "kube-root-ca.crt ConfigMap, skipOwned on",
 			obj: map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "kube-root-ca.crt", "namespace": "default"},
+				testAPIVersion: "v1",
+				testKindField:  "ConfigMap",
+				fieldMetadata:  map[string]any{testNameField: "kube-root-ca.crt", "namespace": "default"},
 			},
 			skipOwned: true,
 			want:      false,
@@ -759,9 +818,9 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "kube-root-ca.crt ConfigMap, skipOwned off",
 			obj: map[string]any{
-				"apiVersion": "v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "kube-root-ca.crt", "namespace": "default"},
+				testAPIVersion: "v1",
+				testKindField:  "ConfigMap",
+				fieldMetadata:  map[string]any{testNameField: "kube-root-ca.crt", "namespace": "default"},
 			},
 			skipOwned: false,
 			want:      true,
@@ -769,9 +828,9 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 		{
 			name: "non-core ConfigMap-named kube-root-ca.crt, skipOwned on",
 			obj: map[string]any{
-				"apiVersion": "example.com/v1",
-				"kind":       "ConfigMap",
-				"metadata":   map[string]any{"name": "kube-root-ca.crt", "namespace": "default"},
+				testAPIVersion: "example.com/v1",
+				testKindField:  "ConfigMap",
+				fieldMetadata:  map[string]any{testNameField: "kube-root-ca.crt", "namespace": "default"},
 			},
 			skipOwned: true,
 			want:      true,
@@ -788,7 +847,7 @@ func TestShouldProcessItem_SkipOwnedAutogenerated(t *testing.T) {
 			opts := &options{skipOwned: tc.skipOwned}
 
 			isNamespaced := false
-			if _, ok := tc.obj["metadata"].(map[string]any)["namespace"]; ok {
+			if _, ok := tc.obj[fieldMetadata].(map[string]any)["namespace"]; ok {
 				isNamespaced = true
 			}
 
@@ -932,7 +991,7 @@ func TestSkipRuleCoversGVR(t *testing.T) {
 			name:     "group+kind rule covers entire GVR",
 			yaml:     "skipResources:\n  - group: apps\n    kind: Deployment\n",
 			group:    "apps",
-			kind:     "Deployment",
+			kind:     testKindDeployment,
 			expected: true,
 		},
 		{
@@ -997,6 +1056,7 @@ func TestCompileSkipRule_InvalidGlob(t *testing.T) {
 	t.Parallel()
 
 	bad := "["
+
 	_, err := compileSkipRule(skipRuleFile{Name: &bad})
 	if err == nil {
 		t.Fatalf("expected error for invalid glob")
@@ -1031,7 +1091,7 @@ skipResources:
 func TestShouldProcessItem_ExcludeNamespaceDropsContents(t *testing.T) {
 	t.Parallel()
 
-	opts := &options{excludeNamespaces: []string{"foo-*"}}
+	opts := &options{excludeNamespaces: []string{testFooPattern}}
 
 	if shouldProcessItem(newObject("ConfigMap", "cfg", "foo-bar"), true, opts) {
 		t.Fatalf("expected ConfigMap in foo-bar to be excluded")
@@ -1045,7 +1105,7 @@ func TestShouldProcessItem_ExcludeNamespaceDropsContents(t *testing.T) {
 func TestShouldProcessItem_ExcludeNamespaceDropsNamespaceObject(t *testing.T) {
 	t.Parallel()
 
-	opts := &options{excludeNamespaces: []string{"foo-*"}}
+	opts := &options{excludeNamespaces: []string{testFooPattern}}
 
 	if shouldProcessItem(newObject("Namespace", "foo-bar", ""), false, opts) {
 		t.Fatalf("expected the foo-bar Namespace object to be excluded")
@@ -1059,7 +1119,7 @@ func TestShouldProcessItem_ExcludeNamespaceDropsNamespaceObject(t *testing.T) {
 func TestShouldProcessItem_ExcludeNamespaceLeavesOtherClusterScopedAlone(t *testing.T) {
 	t.Parallel()
 
-	opts := &options{excludeNamespaces: []string{"foo-*"}}
+	opts := &options{excludeNamespaces: []string{testFooPattern}}
 
 	// Cluster-scoped resources other than Namespace must not be filtered by name
 	// against excludeNamespaces — only Namespace objects are matched by name.
@@ -1080,7 +1140,7 @@ excludeNamespaces:
 		t.Fatalf("parseIgnoreConfigBytes returned error: %v", err)
 	}
 
-	if len(excludes) != 2 || excludes[0] != "foo-*" || excludes[1] != "test-*" {
+	if len(excludes) != 2 || excludes[0] != testFooPattern || excludes[1] != "test-*" {
 		t.Fatalf("unexpected excludes: %v", excludes)
 	}
 }
@@ -1088,10 +1148,14 @@ excludeNamespaces:
 func TestParseIgnoreConfigBytes_ExcludeNamespacesEmptyEntryRejected(t *testing.T) {
 	t.Parallel()
 
-	_, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+	ignoreRules, skipRules, excludes, err := parseIgnoreConfigBytes("test", []byte(`
 excludeNamespaces:
   - ""
 `))
+	_ = ignoreRules
+	_ = skipRules
+	_ = excludes
+
 	if err == nil {
 		t.Fatalf("expected error for empty pattern")
 	}
@@ -1105,7 +1169,7 @@ func TestParseExcludeNamespacesCSV(t *testing.T) {
 		t.Fatalf("parseExcludeNamespacesCSV returned error: %v", err)
 	}
 
-	if len(patterns) != 2 || patterns[0] != "foo-*" || patterns[1] != "test-*" {
+	if len(patterns) != 2 || patterns[0] != testFooPattern || patterns[1] != "test-*" {
 		t.Fatalf("unexpected patterns: %v", patterns)
 	}
 }
@@ -1135,12 +1199,16 @@ func TestParseExcludeNamespacesCSV_OnlySeparatorsRejected(t *testing.T) {
 func TestParseIgnoreConfigBytes_LegacyRulesKeyRejected(t *testing.T) {
 	t.Parallel()
 
-	_, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+	ignoreRules, skipRules, excludes, err := parseIgnoreConfigBytes("test", []byte(`
 rules:
   - kind: ConfigMap
     fields:
       - status
 `))
+	_ = ignoreRules
+	_ = skipRules
+	_ = excludes
+
 	if err == nil {
 		t.Fatalf("expected error for legacy 'rules' key")
 	}
@@ -1153,11 +1221,15 @@ rules:
 func TestParseIgnoreConfigBytes_LegacySkipKeyRejected(t *testing.T) {
 	t.Parallel()
 
-	_, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+	ignoreRules, skipRules, excludes, err := parseIgnoreConfigBytes("test", []byte(`
 skip:
   - kind: Namespace
     name: foo-*
 `))
+	_ = ignoreRules
+	_ = skipRules
+	_ = excludes
+
 	if err == nil {
 		t.Fatalf("expected error for legacy 'skip' key")
 	}
@@ -1170,13 +1242,17 @@ skip:
 func TestParseIgnoreConfigBytes_StrictUnknownField(t *testing.T) {
 	t.Parallel()
 
-	_, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+	ignoreRules, skipRules, excludes, err := parseIgnoreConfigBytes("test", []byte(`
 removeFields:
   - kind: ConfigMap
     unexpected: true
     fields:
       - status
 `))
+	_ = ignoreRules
+	_ = skipRules
+	_ = excludes
+
 	if err == nil {
 		t.Fatalf("expected strict parsing error, got nil")
 	}
@@ -1233,21 +1309,49 @@ removeFields:
 
 	applyIgnoreRules(obj, opts)
 
-	metadata := obj["metadata"].(map[string]any)
-	annotations := metadata["annotations"].(map[string]any)
+	metadata, ok := obj[fieldMetadata].(map[string]any)
+	if !ok {
+		t.Fatal("expected metadata to be map[string]any")
+	}
+
+	annotations, ok := metadata[testAnnotField].(map[string]any)
+	if !ok {
+		t.Fatal("expected annotations to be map[string]any")
+	}
+
 	if _, ok := annotations[lastAppliedAnnotation]; ok {
 		t.Fatalf("expected last-applied annotation to be removed")
 	}
 
-	webhooks := obj["webhooks"].([]any)
-	webhook := webhooks[0].(map[string]any)
-	clientConfig := webhook["clientConfig"].(map[string]any)
+	webhooks, ok := obj["webhooks"].([]any)
+	if !ok {
+		t.Fatal("expected webhooks to be []any")
+	}
+
+	webhook, ok := webhooks[0].(map[string]any)
+	if !ok {
+		t.Fatal("expected webhook to be map[string]any")
+	}
+
+	clientConfig, ok := webhook["clientConfig"].(map[string]any)
+	if !ok {
+		t.Fatal("expected clientConfig to be map[string]any")
+	}
+
 	if _, ok := clientConfig["caBundle"]; ok {
 		t.Fatalf("expected caBundle to be removed")
 	}
 
-	rulesList := webhook["rules"].([]any)
-	rule := rulesList[0].(map[string]any)
+	rulesList, ok := webhook[fieldRules].([]any)
+	if !ok {
+		t.Fatal("expected rules to be []any")
+	}
+
+	rule, ok := rulesList[0].(map[string]any)
+	if !ok {
+		t.Fatal("expected rule to be map[string]any")
+	}
+
 	if _, ok := rule["scope"]; ok {
 		t.Fatalf("expected scope to be removed from each webhook rule")
 	}
@@ -1266,22 +1370,31 @@ removeFields:
 	}
 
 	obj := map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata": map[string]any{
-			"name":      "demo",
-			"namespace": "default",
-			"labels": map[string]any{
-				"app":                      "keep",
-				"kapp.k14s.io/app":         "remove",
-				"kapp.k14s.io/association": "remove",
+		testAPIVersion: "v1",
+		testKindField:  "ConfigMap",
+		fieldMetadata: map[string]any{
+			testNameField: testNameDemo,
+			"namespace":   "default",
+			testLabelsField: map[string]any{
+				"app":                      testLabelKeep,
+				"kapp.k14s.io/app":         testLabelRemove,
+				"kapp.k14s.io/association": testLabelRemove,
 			},
 		},
 	}
 
 	applyIgnoreRules(obj, &options{ignoreRules: rules})
 
-	labels := obj["metadata"].(map[string]any)["labels"].(map[string]any)
+	metadataMap, ok := obj[fieldMetadata].(map[string]any)
+	if !ok {
+		t.Fatal("expected metadata to be map[string]any")
+	}
+
+	labels, ok := metadataMap[testLabelsField].(map[string]any)
+	if !ok {
+		t.Fatal("expected labels to be map[string]any")
+	}
+
 	if _, ok := labels["kapp.k14s.io/app"]; ok {
 		t.Fatalf("expected kapp.k14s.io/app label to be removed")
 	}
@@ -1290,7 +1403,7 @@ removeFields:
 		t.Fatalf("expected kapp.k14s.io/association label to be removed")
 	}
 
-	if labels["app"] != "keep" {
+	if labels["app"] != testLabelKeep {
 		t.Fatalf("expected non-matching label to remain, got %#v", labels["app"])
 	}
 }
@@ -1308,30 +1421,34 @@ removeFields:
 	}
 
 	obj := map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata": map[string]any{
-			"name":      "demo",
-			"namespace": "default",
+		testAPIVersion: "v1",
+		testKindField:  "ConfigMap",
+		fieldMetadata: map[string]any{
+			testNameField: testNameDemo,
+			"namespace":   "default",
 		},
 		"foo": map[string]any{
-			"status": "keep",
+			testStatusField: testLabelKeep,
 		},
 		"foo.status": "keep-literal-key",
-		"status": map[string]any{
-			"phase": "remove",
+		testStatusField: map[string]any{
+			"phase": testLabelRemove,
 		},
 	}
 
 	applyIgnoreRules(obj, &options{ignoreRules: rules})
 
-	if _, ok := obj["status"]; ok {
+	if _, ok := obj[testStatusField]; ok {
 		t.Fatalf("expected top-level status to be removed")
 	}
 
-	foo := obj["foo"].(map[string]any)
-	if foo["status"] != "keep" {
-		t.Fatalf("expected nested foo.status to remain, got %#v", foo["status"])
+	foo, ok := obj["foo"].(map[string]any)
+	if !ok {
+		t.Fatal("expected foo to be map[string]any")
+	}
+
+	if foo[testStatusField] != testLabelKeep {
+		t.Fatalf("expected nested foo.status to remain, got %#v", foo[testStatusField])
 	}
 
 	if obj["foo.status"] != "keep-literal-key" {
@@ -1354,16 +1471,20 @@ removeFields:
 	}
 
 	obj := map[string]any{
-		"apiVersion": "apps/v1",
-		"kind":       "Deployment",
-		"metadata":   map[string]any{"name": "demo", "namespace": "default"},
-		"spec":       map[string]any{"progressDeadlineSeconds": float64(600)},
+		testAPIVersion: "apps/v1",
+		testKindField:  testKindDeployment,
+		fieldMetadata:  map[string]any{testNameField: testNameDemo, "namespace": "default"},
+		testSpecField:  map[string]any{testProgressDLS: float64(600)},
 	}
 
 	applyIgnoreRules(obj, &options{ignoreRules: rules})
 
-	spec := obj["spec"].(map[string]any)
-	if _, ok := spec["progressDeadlineSeconds"]; ok {
+	spec, ok := obj[testSpecField].(map[string]any)
+	if !ok {
+		t.Fatal("expected spec to be map[string]any")
+	}
+
+	if _, ok := spec[testProgressDLS]; ok {
 		t.Fatalf("expected progressDeadlineSeconds to be removed when value matches")
 	}
 }
@@ -1383,17 +1504,21 @@ removeFields:
 	}
 
 	obj := map[string]any{
-		"apiVersion": "apps/v1",
-		"kind":       "Deployment",
-		"metadata":   map[string]any{"name": "demo", "namespace": "default"},
-		"spec":       map[string]any{"progressDeadlineSeconds": float64(120)},
+		testAPIVersion: "apps/v1",
+		testKindField:  testKindDeployment,
+		fieldMetadata:  map[string]any{testNameField: testNameDemo, "namespace": "default"},
+		testSpecField:  map[string]any{testProgressDLS: float64(120)},
 	}
 
 	applyIgnoreRules(obj, &options{ignoreRules: rules})
 
-	spec := obj["spec"].(map[string]any)
-	if spec["progressDeadlineSeconds"] != float64(120) {
-		t.Fatalf("expected progressDeadlineSeconds to remain when value does not match, got %#v", spec["progressDeadlineSeconds"])
+	spec, ok := obj[testSpecField].(map[string]any)
+	if !ok {
+		t.Fatal("expected spec to be map[string]any")
+	}
+
+	if spec[testProgressDLS] != float64(120) {
+		t.Fatalf("expected progressDeadlineSeconds to remain when value does not match, got %#v", spec[testProgressDLS])
 	}
 }
 
@@ -1413,23 +1538,32 @@ removeFields:
 	}
 
 	obj := map[string]any{
-		"apiVersion": "apps/v1",
-		"kind":       "Deployment",
-		"metadata":   map[string]any{"name": "demo", "namespace": "default", "generation": int64(3)},
-		"spec":       map[string]any{"progressDeadlineSeconds": float64(600), "replicas": float64(1)},
+		testAPIVersion: "apps/v1",
+		testKindField:  testKindDeployment,
+		fieldMetadata:  map[string]any{testNameField: testNameDemo, "namespace": "default", "generation": int64(3)},
+		testSpecField:  map[string]any{testProgressDLS: float64(600), "replicas": float64(1)},
 	}
 
 	applyIgnoreRules(obj, &options{ignoreRules: rules})
 
-	metadata := obj["metadata"].(map[string]any)
+	metadata, ok := obj[fieldMetadata].(map[string]any)
+	if !ok {
+		t.Fatal("expected metadata to be map[string]any")
+	}
+
 	if _, ok := metadata["generation"]; ok {
 		t.Fatalf("expected generation (no value constraint) to be removed")
 	}
 
-	spec := obj["spec"].(map[string]any)
-	if _, ok := spec["progressDeadlineSeconds"]; ok {
+	spec, ok := obj[testSpecField].(map[string]any)
+	if !ok {
+		t.Fatal("expected spec to be map[string]any")
+	}
+
+	if _, ok := spec[testProgressDLS]; ok {
 		t.Fatalf("expected progressDeadlineSeconds to be removed when value matches")
 	}
+
 	if spec["replicas"] != float64(1) {
 		t.Fatalf("expected replicas to remain untouched, got %#v", spec["replicas"])
 	}
@@ -1438,13 +1572,17 @@ removeFields:
 func TestParseIgnoreConfigBytes_ValueConstraint_UnknownKeyRejected(t *testing.T) {
 	t.Parallel()
 
-	_, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+	ignoreRules, skipRules, excludes, err := parseIgnoreConfigBytes("test", []byte(`
 removeFields:
   - fields:
       - path: spec.foo
         value: bar
         unknown: oops
 `))
+	_ = ignoreRules
+	_ = skipRules
+	_ = excludes
+
 	if err == nil {
 		t.Fatal("expected error for unknown key in field entry map")
 	}
@@ -1464,19 +1602,23 @@ removeFields:
 	}
 
 	obj := map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata": map[string]any{
-			"name":      "demo",
-			"namespace": "default",
-			"labels":    nil,
+		testAPIVersion: "v1",
+		testKindField:  "ConfigMap",
+		fieldMetadata: map[string]any{
+			testNameField:   testNameDemo,
+			"namespace":     "default",
+			testLabelsField: nil,
 		},
 	}
 
 	applyIgnoreRules(obj, &options{ignoreRules: rules})
 
-	metadata := obj["metadata"].(map[string]any)
-	if _, ok := metadata["labels"]; ok {
+	metadata, ok := obj[fieldMetadata].(map[string]any)
+	if !ok {
+		t.Fatal("expected metadata to be map[string]any")
+	}
+
+	if _, ok := metadata[testLabelsField]; ok {
 		t.Fatalf("expected nil labels to be removed by omitempty rule")
 	}
 }
@@ -1497,23 +1639,28 @@ removeFields:
 	}
 
 	obj := map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata": map[string]any{
-			"name":        "demo",
-			"namespace":   "default",
-			"labels":      map[string]any{},
-			"annotations": map[string]any{},
+		testAPIVersion: "v1",
+		testKindField:  "ConfigMap",
+		fieldMetadata: map[string]any{
+			testNameField:   testNameDemo,
+			"namespace":     "default",
+			testLabelsField: map[string]any{},
+			testAnnotField:  map[string]any{},
 		},
 	}
 
 	applyIgnoreRules(obj, &options{ignoreRules: rules})
 
-	metadata := obj["metadata"].(map[string]any)
-	if _, ok := metadata["labels"]; ok {
+	metadata, ok := obj[fieldMetadata].(map[string]any)
+	if !ok {
+		t.Fatal("expected metadata to be map[string]any")
+	}
+
+	if _, ok := metadata[testLabelsField]; ok {
 		t.Fatalf("expected empty labels map to be removed by omitempty rule")
 	}
-	if _, ok := metadata["annotations"]; ok {
+
+	if _, ok := metadata[testAnnotField]; ok {
 		t.Fatalf("expected empty annotations map to be removed by omitempty rule")
 	}
 }
@@ -1532,22 +1679,27 @@ removeFields:
 	}
 
 	obj := map[string]any{
-		"apiVersion": "v1",
-		"kind":       "ConfigMap",
-		"metadata": map[string]any{
-			"name":      "demo",
-			"namespace": "default",
-			"labels":    map[string]any{"app": "myapp"},
+		testAPIVersion: "v1",
+		testKindField:  "ConfigMap",
+		fieldMetadata: map[string]any{
+			testNameField:   testNameDemo,
+			"namespace":     "default",
+			testLabelsField: map[string]any{"app": "myapp"},
 		},
 	}
 
 	applyIgnoreRules(obj, &options{ignoreRules: rules})
 
-	metadata := obj["metadata"].(map[string]any)
-	labels, ok := metadata["labels"].(map[string]any)
+	metadata, ok := obj[fieldMetadata].(map[string]any)
+	if !ok {
+		t.Fatal("expected metadata to be map[string]any")
+	}
+
+	labels, ok := metadata[testLabelsField].(map[string]any)
 	if !ok {
 		t.Fatalf("expected non-empty labels to be preserved by omitempty rule")
 	}
+
 	if labels["app"] != "myapp" {
 		t.Fatalf("expected labels to remain unchanged, got %#v", labels)
 	}
@@ -1556,13 +1708,17 @@ removeFields:
 func TestParseIgnoreConfigBytes_OmitEmpty_AndValueAreMutuallyExclusive(t *testing.T) {
 	t.Parallel()
 
-	_, _, _, err := parseIgnoreConfigBytes("test", []byte(`
+	ignoreRules, skipRules, excludes, err := parseIgnoreConfigBytes("test", []byte(`
 removeFields:
   - fields:
       - path: metadata.labels
         value: null
         omitempty: true
 `))
+	_ = ignoreRules
+	_ = skipRules
+	_ = excludes
+
 	if err == nil {
 		t.Fatal("expected error when both 'value' and 'omitempty' are set in the same field entry")
 	}
@@ -1594,8 +1750,8 @@ func TestWriteYAML_NoIgnoreRulesByDefault(t *testing.T) {
 		"ownerReferences:",
 		"resourceVersion:",
 		"uid:",
-		"deployment.kubernetes.io/revision",
-		"clusterctl.cluster.x-k8s.io",
+		testAnnotRevision,
+		testAnnotClusterctl,
 		lastAppliedAnnotation,
 		"caBundle:",
 		"matchPolicy:",
@@ -1642,8 +1798,8 @@ func TestWriteYAML_CommonIgnoreConfigApplied(t *testing.T) {
 		"ownerReferences:",
 		"resourceVersion:",
 		"uid:",
-		"deployment.kubernetes.io/revision",
-		"clusterctl.cluster.x-k8s.io",
+		testAnnotRevision,
+		testAnnotClusterctl,
 		lastAppliedAnnotation,
 		"caBundle:",
 		"matchPolicy:",
@@ -1669,7 +1825,13 @@ func TestWriteYAML_DumpManagedFieldsOverridesCommonIgnore(t *testing.T) {
 	}
 
 	obj := webhookObject()
-	obj["metadata"].(map[string]any)["managedFields"] = []any{
+
+	metadataMap, ok := obj[fieldMetadata].(map[string]any)
+	if !ok {
+		t.Fatal("expected metadata to be map[string]any")
+	}
+
+	metadataMap["managedFields"] = []any{
 		map[string]any{"manager": "kubectl"},
 	}
 
@@ -1717,6 +1879,7 @@ func TestLoadIgnoreRules_UserFileOnly(t *testing.T) {
 	t.Parallel()
 
 	configFile := filepath.Join(t.TempDir(), "ignore.yaml")
+
 	err := os.WriteFile(configFile, []byte(`
 removeFields:
   - kind: ConfigMap
@@ -1741,6 +1904,7 @@ func TestLoadIgnoreRules_CommonAndUserFileAreCombined(t *testing.T) {
 	t.Parallel()
 
 	configFile := filepath.Join(t.TempDir(), "ignore.yaml")
+
 	err := os.WriteFile(configFile, []byte(`
 removeFields:
   - kind: ConfigMap
@@ -1770,6 +1934,7 @@ func TestWriteCommonIgnoreConfig_PrintsEmbeddedYamlVerbatim(t *testing.T) {
 	t.Parallel()
 
 	var buf bytes.Buffer
+
 	err := writeCommonIgnoreConfig(&buf)
 	if err != nil {
 		t.Fatalf("writeCommonIgnoreConfig returned error: %v", err)
@@ -1782,13 +1947,13 @@ func TestWriteCommonIgnoreConfig_PrintsEmbeddedYamlVerbatim(t *testing.T) {
 
 func newObject(kind string, name string, namespace string) *unstructured.Unstructured {
 	metadata := map[string]any{
-		"name": name,
+		testNameField: name,
 	}
 
 	obj := map[string]any{
-		"apiVersion": "v1",
-		"kind":       kind,
-		"metadata":   metadata,
+		testAPIVersion: "v1",
+		testKindField:  kind,
+		fieldMetadata:  metadata,
 	}
 
 	if namespace != "" {
@@ -1800,26 +1965,26 @@ func newObject(kind string, name string, namespace string) *unstructured.Unstruc
 
 func webhookObject() map[string]any {
 	return map[string]any{
-		"apiVersion": "admissionregistration.k8s.io/v1",
-		"kind":       "MutatingWebhookConfiguration",
-		"metadata": map[string]any{
-			"name":              "capi-mutating-webhook-configuration",
+		testAPIVersion: "admissionregistration.k8s.io/v1",
+		testKindField:  "MutatingWebhookConfiguration",
+		fieldMetadata: map[string]any{
+			testNameField:       "capi-mutating-webhook-configuration",
 			"creationTimestamp": "2026-04-22T00:00:00Z",
 			"generation":        int64(2),
 			"ownerReferences": []any{
 				map[string]any{
-					"apiVersion": "v1",
-					"kind":       "Namespace",
-					"name":       "capi-system",
-					"uid":        "owner-uid-1",
+					testAPIVersion: "v1",
+					testKindField:  "Namespace",
+					testNameField:  "capi-system",
+					testUIDField:   "owner-uid-1",
 				},
 			},
 			"resourceVersion": "123",
-			"uid":             "uid-1",
-			"annotations": map[string]any{
-				"deployment.kubernetes.io/revision": "2",
-				"clusterctl.cluster.x-k8s.io":       "",
-				lastAppliedAnnotation:               "present",
+			testUIDField:      "uid-1",
+			testAnnotField: map[string]any{
+				testAnnotRevision:     "2",
+				testAnnotClusterctl:   "",
+				lastAppliedAnnotation: "present",
 			},
 		},
 		"webhooks": []any{
@@ -1827,15 +1992,15 @@ func webhookObject() map[string]any {
 				"clientConfig": map[string]any{
 					"caBundle": "bundle",
 					"service": map[string]any{
-						"name": "webhook-service",
-						"port": int64(443),
+						testNameField: "webhook-service",
+						"port":        int64(443),
 					},
 				},
 				"matchPolicy":        "Equivalent",
 				"namespaceSelector":  map[string]any{},
 				"objectSelector":     map[string]any{},
 				"reinvocationPolicy": "Never",
-				"rules": []any{
+				fieldRules: []any{
 					map[string]any{
 						"scope": "*",
 					},
@@ -1843,7 +2008,7 @@ func webhookObject() map[string]any {
 				"timeoutSeconds": int64(10),
 			},
 		},
-		"status": map[string]any{
+		testStatusField: map[string]any{
 			"observedGeneration": int64(2),
 		},
 	}
@@ -1863,7 +2028,7 @@ func TestValidateKindFilterMatchesResources(t *testing.T) {
 		{
 			GroupVersion: "apps/v1",
 			APIResources: []meta.APIResource{
-				{Kind: "Deployment"},
+				{Kind: testKindDeployment},
 			},
 		},
 	}
@@ -1876,7 +2041,7 @@ func TestValidateKindFilterMatchesResources(t *testing.T) {
 		{name: "empty filter passes", kindFilter: nil, wantErr: false},
 		{name: "exact match passes", kindFilter: []string{"ConfigMap"}, wantErr: false},
 		{name: "glob match passes", kindFilter: []string{"Config*"}, wantErr: false},
-		{name: "multiple kinds one matches", kindFilter: []string{"Deployment", "DoesNotExist"}, wantErr: false},
+		{name: "multiple kinds one matches", kindFilter: []string{testKindDeployment, "DoesNotExist"}, wantErr: false},
 		{name: "no match returns error", kindFilter: []string{"asdf"}, wantErr: true},
 		{name: "all no match returns error", kindFilter: []string{"Foo", "Bar"}, wantErr: true},
 	}
@@ -1884,10 +2049,12 @@ func TestValidateKindFilterMatchesResources(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
+
 			err := validateKindFilterMatchesResources(tc.kindFilter, resourceList)
 			if tc.wantErr && err == nil {
 				t.Fatal("expected error, got nil")
 			}
+
 			if !tc.wantErr && err != nil {
 				t.Fatalf("expected no error, got: %v", err)
 			}
