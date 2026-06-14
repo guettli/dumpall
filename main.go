@@ -19,6 +19,8 @@ import (
 	"strings"
 
 	"github.com/gavv/cobradoc"
+	"github.com/gonvenience/ytbx"
+	"github.com/homeport/dyff/pkg/dyff"
 	"github.com/spf13/pflag"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -79,6 +81,7 @@ type options struct {
 	dumpSecrets           bool
 	dumpManagedFields     bool
 	removeOutdir          bool
+	overwriteOutdir       bool
 	skipOwned             bool
 	ignoreConfigUseCommon bool
 	ignoreConfigFile      string
@@ -302,6 +305,19 @@ func main() {
 		os.Exit(0)
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "diff" {
+		err := runDiff(os.Args[2:])
+		if err != nil {
+			if !errors.Is(err, errDiffsFound) {
+				fmt.Fprintln(os.Stderr, err)
+			}
+
+			os.Exit(1)
+		}
+
+		os.Exit(0)
+	}
+
 	err := mainWithError()
 	if err != nil {
 		fmt.Println(err)
@@ -336,7 +352,7 @@ func mainWithError() error {
 	_ = pflag.CommandLine.MarkHidden("dir")
 
 	pflag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s\nRead resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n", toolNameForUsageOutput)
+		fmt.Fprintf(os.Stderr, "Usage: %s\nRead resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n  diff <local-dump-dir>       Diff current cluster state against a local dump\n", toolNameForUsageOutput)
 		pflag.PrintDefaults()
 	}
 
@@ -346,28 +362,6 @@ func mainWithError() error {
 		pflag.Usage()
 		return fmt.Errorf("unexpected positional arguments: %v", pflag.Args())
 	}
-
-	namespaceFilter, err := parseNamespaceFilter(opts.namespacesCSV)
-	if err != nil {
-		return err
-	}
-
-	opts.namespaceFilter = namespaceFilter
-
-	kindFilter, err := parseKindFilter(opts.kindFilterCSV)
-	if err != nil {
-		return err
-	}
-
-	opts.kindFilter = kindFilter
-
-	nameFilterRegex, nameFilterEnabled, err := parseNameFilterRegex(opts.nameRegex)
-	if err != nil {
-		return err
-	}
-
-	opts.nameFilterEnabled = nameFilterEnabled
-	opts.nameFilterRegex = nameFilterRegex
 
 	opts.readYamlFrom = strings.TrimSpace(opts.readYamlFrom)
 
@@ -390,6 +384,44 @@ func mainWithError() error {
 	}
 
 	opts.readResourceNamesFrom = strings.TrimSpace(opts.readResourceNamesFrom)
+
+	err := finalizeOpts(opts)
+	if err != nil {
+		return err
+	}
+
+	if opts.removeOutdir {
+		err := os.RemoveAll(opts.outputDir)
+		if err != nil {
+			return fmt.Errorf("failed to remove out-dir %s: %w", opts.outputDir, err)
+		}
+	}
+
+	return runDump(opts)
+}
+
+func finalizeOpts(opts *options) error {
+	namespaceFilter, err := parseNamespaceFilter(opts.namespacesCSV)
+	if err != nil {
+		return err
+	}
+
+	opts.namespaceFilter = namespaceFilter
+
+	kindFilter, err := parseKindFilter(opts.kindFilterCSV)
+	if err != nil {
+		return err
+	}
+
+	opts.kindFilter = kindFilter
+
+	nameFilterRegex, nameFilterEnabled, err := parseNameFilterRegex(opts.nameRegex)
+	if err != nil {
+		return err
+	}
+
+	opts.nameFilterEnabled = nameFilterEnabled
+	opts.nameFilterRegex = nameFilterRegex
 
 	ignoreRules, skipRules, excludes, err := loadIgnoreRules(opts.ignoreConfigUseCommon, opts.ignoreConfigFile)
 	if err != nil {
@@ -418,19 +450,16 @@ func mainWithError() error {
 
 	opts.excludeNamespaces = append(opts.excludeNamespaces, cliExcludes...)
 
-	if opts.removeOutdir {
-		err := os.RemoveAll(opts.outputDir)
-		if err != nil {
-			return fmt.Errorf("failed to remove out-dir %s: %w", opts.outputDir, err)
-		}
-	}
+	return nil
+}
 
-	_, err = os.Stat(opts.outputDir)
-	if err == nil {
+func runDump(opts *options) error {
+	_, err := os.Stat(opts.outputDir)
+	if err == nil && !opts.overwriteOutdir {
 		return fmt.Errorf("output directory %q already exists. Use --remove-out-dir if you want to overwrite it", opts.outputDir)
 	}
 
-	if !errors.Is(err, os.ErrNotExist) {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("failed to inspect output directory %q: %w", opts.outputDir, err)
 	}
 
@@ -486,6 +515,224 @@ func mainWithError() error {
 	}
 
 	return readFromAPIServer(dynClient, resourceList, opts)
+}
+
+var errDiffsFound = errors.New("differences found")
+
+func runDiff(args []string) error {
+	fs := pflag.NewFlagSet("diff", pflag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	var (
+		readYamlFrom         string
+		namespacesCSV        string
+		kindFilterCSV        string
+		nameRegex            string
+		skipNameGlob         string
+		excludeNamespacesCSV string
+		ignoreConfigFile     string
+		dumpSecrets          bool
+		skipOwned            bool
+		quiet                bool
+	)
+
+	fs.StringVar(&readYamlFrom, "read-yaml-from", "", "Read YAML from file/dir (source A) instead of connecting to cluster")
+	fs.StringVarP(&namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to compare")
+	fs.StringVar(&kindFilterCSV, "kind", "", "Comma-separated list of kind globs to compare (e.g. 'ConfigMap,Secret')")
+	fs.StringVarP(&nameRegex, "name-regex", "x", "", "Only compare resources where metadata.name matches this regex")
+	fs.StringVar(&skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob")
+	fs.StringVar(&excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to exclude")
+	fs.Var((*fileValue)(&ignoreConfigFile), "ignore-config", "Path to a YAML file with additional ignore rules (common config is always applied)")
+	fs.BoolVarP(&dumpSecrets, "dump-secrets", "s", false, "Include secret values in comparison")
+	fs.BoolVarP(&skipOwned, "skip-owned", "O", false, "Skip resources with a controlling owner reference")
+	fs.BoolVarP(&quiet, "quiet", "q", true, "Suppress progress output")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s diff [flags] <local-dump-dir>\n\nDiff the current cluster state against a local dump directory.\nBoth sides are normalized with the common ignore config before comparing.\n\nFlags:\n", toolNameForUsageOutput)
+		fs.PrintDefaults()
+	}
+
+	err := fs.Parse(args)
+	if err != nil {
+		return fmt.Errorf("parsing flags: %w", err)
+	}
+
+	if len(fs.Args()) != 1 {
+		fs.Usage()
+		return fmt.Errorf("diff requires exactly one positional argument: the local dump directory")
+	}
+
+	localDumpDir := fs.Args()[0]
+
+	tempA, err := os.MkdirTemp("", "dumpall-diff-a-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+
+	defer os.RemoveAll(tempA)
+
+	tempB, err := os.MkdirTemp("", "dumpall-diff-b-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+
+	defer os.RemoveAll(tempB)
+
+	labelA := "cluster"
+	if readYamlFrom != "" {
+		labelA = readYamlFrom
+	}
+
+	buildOpts := func(outputDir, readFrom string) *options {
+		return &options{
+			outputDir:             outputDir,
+			readYamlFrom:          strings.TrimSpace(readFrom),
+			namespacesCSV:         namespacesCSV,
+			kindFilterCSV:         kindFilterCSV,
+			nameRegex:             nameRegex,
+			skipNameGlob:          skipNameGlob,
+			excludeNamespacesCSV:  excludeNamespacesCSV,
+			ignoreConfigFile:      ignoreConfigFile,
+			dumpSecrets:           dumpSecrets,
+			skipOwned:             skipOwned,
+			ignoreConfigUseCommon: true,
+			quiet:                 quiet,
+			overwriteOutdir:       true,
+		}
+	}
+
+	optsA := buildOpts(tempA, readYamlFrom)
+
+	err = finalizeOpts(optsA)
+	if err != nil {
+		return fmt.Errorf("configuring source A: %w", err)
+	}
+
+	err = runDump(optsA)
+	if err != nil {
+		return fmt.Errorf("normalizing %s: %w", labelA, err)
+	}
+
+	optsB := buildOpts(tempB, localDumpDir)
+
+	err = finalizeOpts(optsB)
+	if err != nil {
+		return fmt.Errorf("configuring source B: %w", err)
+	}
+
+	err = runDump(optsB)
+	if err != nil {
+		return fmt.Errorf("normalizing %s: %w", localDumpDir, err)
+	}
+
+	return compareDirs(tempA, labelA, tempB, localDumpDir)
+}
+
+func compareDirs(dirA, labelA, dirB, labelB string) error {
+	filesA, err := findYAMLFiles(dirA)
+	if err != nil {
+		return err
+	}
+
+	filesB, err := findYAMLFiles(dirB)
+	if err != nil {
+		return err
+	}
+
+	relToAbsA := make(map[string]string, len(filesA))
+
+	for _, f := range filesA {
+		rel, err := filepath.Rel(dirA, f)
+		if err != nil {
+			return fmt.Errorf("calculating relative path: %w", err)
+		}
+
+		relToAbsA[rel] = f
+	}
+
+	relToAbsB := make(map[string]string, len(filesB))
+
+	for _, f := range filesB {
+		rel, err := filepath.Rel(dirB, f)
+		if err != nil {
+			return fmt.Errorf("calculating relative path: %w", err)
+		}
+
+		relToAbsB[rel] = f
+	}
+
+	allRels := make(map[string]struct{}, len(relToAbsA)+len(relToAbsB))
+
+	for rel := range relToAbsA {
+		allRels[rel] = struct{}{}
+	}
+
+	for rel := range relToAbsB {
+		allRels[rel] = struct{}{}
+	}
+
+	sortedRels := make([]string, 0, len(allRels))
+
+	for rel := range allRels {
+		sortedRels = append(sortedRels, rel)
+	}
+
+	sort.Strings(sortedRels)
+
+	hasDiffs := false
+
+	for _, rel := range sortedRels {
+		absA, inA := relToAbsA[rel]
+		absB, inB := relToAbsB[rel]
+
+		switch {
+		case inA && !inB:
+			fmt.Printf("only in %s: %s\n", labelA, rel)
+
+			hasDiffs = true
+		case !inA && inB:
+			fmt.Printf("only in %s: %s\n", labelB, rel)
+
+			hasDiffs = true
+		default:
+			from, err := ytbx.LoadFile(absA)
+			if err != nil {
+				return fmt.Errorf("failed to load %s: %w", absA, err)
+			}
+
+			to, err := ytbx.LoadFile(absB)
+			if err != nil {
+				return fmt.Errorf("failed to load %s: %w", absB, err)
+			}
+
+			report, err := dyff.CompareInputFiles(from, to, dyff.KubernetesEntityDetection(true))
+			if err != nil {
+				return fmt.Errorf("failed to compare %s: %w", rel, err)
+			}
+
+			if len(report.Diffs) > 0 {
+				hasDiffs = true
+
+				fmt.Printf("\n%s\n", rel)
+
+				hr := dyff.HumanReport{
+					Report:     report,
+					OmitHeader: true,
+				}
+
+				err := hr.WriteReport(os.Stdout)
+				if err != nil {
+					return fmt.Errorf("failed to write diff for %s: %w", rel, err)
+				}
+			}
+		}
+	}
+
+	if hasDiffs {
+		return errDiffsFound
+	}
+
+	return nil
 }
 
 func readYamlFromFile(fileName string, opts *options) error {
@@ -1218,7 +1465,7 @@ func parseExcludeNamespacesCSV(csv string) ([]string, error) {
 
 	patterns := make([]string, 0)
 
-	for _, entry := range strings.Split(csv, ",") {
+	for entry := range strings.SplitSeq(csv, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue
@@ -1759,7 +2006,7 @@ func parseNamespaceFilter(namespacesCSV string) (map[string]struct{}, error) {
 		return filter, nil
 	}
 
-	for _, namespace := range strings.Split(namespacesCSV, ",") {
+	for namespace := range strings.SplitSeq(namespacesCSV, ",") {
 		namespace = strings.TrimSpace(namespace)
 		if namespace == "" {
 			continue
@@ -1783,7 +2030,7 @@ func parseKindFilter(kindFilterCSV string) ([]string, error) {
 
 	patterns := make([]string, 0)
 
-	for _, entry := range strings.Split(trimmed, ",") {
+	for entry := range strings.SplitSeq(trimmed, ",") {
 		entry = strings.TrimSpace(entry)
 		if entry == "" {
 			continue

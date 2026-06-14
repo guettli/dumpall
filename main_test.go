@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -2059,5 +2061,126 @@ func TestValidateKindFilterMatchesResources(t *testing.T) {
 				t.Fatalf("expected no error, got: %v", err)
 			}
 		})
+	}
+}
+
+func TestRunDiff_WithExistingTempDirs(t *testing.T) {
+	t.Parallel()
+
+	// Create temporary directories representing the two sides of the diff.
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+
+	// Create some sample YAML files in both directories.
+	manifestA := filepath.Join(dirA, "configmap.yaml")
+	manifestB := filepath.Join(dirB, "configmap.yaml")
+
+	contentA := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-config
+data:
+  key: valueA
+`
+	contentB := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-config
+data:
+  key: valueB
+`
+
+	err := os.WriteFile(manifestA, []byte(contentA), 0o600)
+	if err != nil {
+		t.Fatalf("failed to write manifest A: %v", err)
+	}
+
+	err = os.WriteFile(manifestB, []byte(contentB), 0o600)
+	if err != nil {
+		t.Fatalf("failed to write manifest B: %v", err)
+	}
+
+	// runDiff should not fail with "output directory already exists" error.
+	// Since the values for data.key differ, it should return errDiffsFound.
+	err = runDiff([]string{"--read-yaml-from", dirA, dirB})
+	if err == nil {
+		t.Fatal("expected differences found error, got nil")
+	}
+
+	if !errors.Is(err, errDiffsFound) {
+		t.Fatalf("expected errDiffsFound, got: %v", err)
+	}
+}
+
+func TestRunDiff_QuietDefault(t *testing.T) {
+	// Create temporary directories representing the two sides of the diff.
+	dirA := t.TempDir()
+	dirB := t.TempDir()
+
+	manifestA := filepath.Join(dirA, "configmap.yaml")
+	manifestB := filepath.Join(dirB, "configmap.yaml")
+
+	content := `apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: test-config
+data:
+  key: value
+`
+
+	err := os.WriteFile(manifestA, []byte(content), 0o600)
+	if err != nil {
+		t.Fatalf("failed to write manifest A: %v", err)
+	}
+
+	err = os.WriteFile(manifestB, []byte(content), 0o600)
+	if err != nil {
+		t.Fatalf("failed to write manifest B: %v", err)
+	}
+
+	// Capture stdout.
+	oldStdout := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+
+	// Run with quiet default (should NOT print progress outputs like "Written:")
+	err = runDiff([]string{"--read-yaml-from", dirA, dirB})
+
+	w.Close()
+
+	var buf bytes.Buffer
+
+	_, _ = io.Copy(&buf, r)
+	os.Stdout = oldStdout
+
+	if err != nil {
+		t.Fatalf("expected no differences/errors, got: %v", err)
+	}
+
+	output := buf.String()
+	if strings.Contains(output, "Written:") || strings.Contains(output, "Total files written:") {
+		t.Errorf("expected quiet output by default, but got progress logs: %q", output)
+	}
+
+	// Run with --quiet=false (should print progress outputs like "Written:")
+	r2, w2, _ := os.Pipe()
+	os.Stdout = w2
+
+	err = runDiff([]string{"--read-yaml-from", dirA, dirB, "--quiet=false"})
+
+	w2.Close()
+
+	var buf2 bytes.Buffer
+
+	_, _ = io.Copy(&buf2, r2)
+	os.Stdout = oldStdout
+
+	if err != nil {
+		t.Fatalf("expected no differences/errors, got: %v", err)
+	}
+
+	output2 := buf2.String()
+	if !strings.Contains(output2, "Written:") || !strings.Contains(output2, "Total files written:") {
+		t.Errorf("expected progress logs with --quiet=false, but got output: %q", output2)
 	}
 }
