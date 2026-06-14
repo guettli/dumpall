@@ -19,8 +19,9 @@ import (
 	"strings"
 
 	"github.com/gavv/cobradoc"
-	"github.com/gonvenience/ytbx"
-	"github.com/homeport/dyff/pkg/dyff"
+	"github.com/hexops/gotextdiff"
+	"github.com/hexops/gotextdiff/myers"
+	"github.com/hexops/gotextdiff/span"
 	"github.com/spf13/pflag"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -695,35 +696,27 @@ func compareDirs(dirA, labelA, dirB, labelB string) error {
 
 			hasDiffs = true
 		default:
-			from, err := ytbx.LoadFile(absA)
+			contentA, err := os.ReadFile(absA)
 			if err != nil {
-				return fmt.Errorf("failed to load %s: %w", absA, err)
+				return fmt.Errorf("failed to read %s: %w", absA, err)
 			}
 
-			to, err := ytbx.LoadFile(absB)
+			contentB, err := os.ReadFile(absB)
 			if err != nil {
-				return fmt.Errorf("failed to load %s: %w", absB, err)
+				return fmt.Errorf("failed to read %s: %w", absB, err)
 			}
 
-			report, err := dyff.CompareInputFiles(from, to, dyff.KubernetesEntityDetection(true))
-			if err != nil {
-				return fmt.Errorf("failed to compare %s: %w", rel, err)
-			}
+			strA := string(contentA)
+			strB := string(contentB)
 
-			if len(report.Diffs) > 0 {
+			if strA != strB {
 				hasDiffs = true
 
 				fmt.Printf("\n%s\n", rel)
 
-				hr := dyff.HumanReport{
-					Report:     report,
-					OmitHeader: true,
-				}
-
-				err := hr.WriteReport(os.Stdout)
-				if err != nil {
-					return fmt.Errorf("failed to write diff for %s: %w", rel, err)
-				}
+				edits := myers.ComputeEdits(span.URIFromPath(absA), strA, strB)
+				diff := fmt.Sprint(gotextdiff.ToUnified(filepath.Join(labelA, rel), filepath.Join(labelB, rel), strA, edits))
+				fmt.Print(diff)
 			}
 		}
 	}
