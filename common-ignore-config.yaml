@@ -11,13 +11,25 @@ removeFields:
       - metadata.annotations.clusterctl\.cluster\.x-k8s\.io
       - metadata.annotations.kubectl\.kubernetes\.io/last-applied-configuration
 
-      - metadata.annotations.kapp\.k14s\.io/identity
-      - metadata.annotations.kapp\.k14s\.io/original-diff-md5
-      - metadata.annotations.kapp\.k14s\.io/original
-      - metadata.labels.kapp\.k14s\.io/app
-      - metadata.labels.kapp\.k14s\.io/association
+      # kapp adds its app/association tracking labels and annotations to every
+      # managed resource, including pod template labels and selectors. Use ...
+      # with a glob to catch all kapp.k14s.io/* keys at any nesting depth.
+      - ...kapp\.k14s\.io/*
 
       - metadata.labels.argocd\.argoproj\.io/instance
+
+      # Helm sets these labels automatically on every managed resource,
+      # including pod template labels. The chart version is redundant with
+      # the container image tag. Use ... to remove at any nesting depth.
+      - ...labels.helm\.sh/chart
+      - path: ...labels.app\.kubernetes\.io/managed-by
+        value: Helm
+
+      # Runtime-volatile annotations set by tools, not by the user.
+      - metadata.annotations.kubernetes\.io/change-cause
+      - ...annotations.keel\.sh/update-time
+      - ...annotations.kubectl\.kubernetes\.io/restartedAt
+
       - status
       # Remove empty labels/annotations maps. Helm often renders these as explicit
       # null; the API server may return {}. Both are noise in source-controlled YAML.
@@ -30,6 +42,9 @@ removeFields:
     fields:
       - metadata.labels.kubernetes\.io/metadata\.name
       - spec.finalizers
+      # API server returns spec: {} even when no spec was written.
+      - path: spec
+        value: {}
   # Webhook defaults and injected CA bundles.
   - group: admissionregistration.k8s.io
     kind: "*WebhookConfiguration"
@@ -55,6 +70,26 @@ removeFields:
         value: None
       - path: spec.conversion
         value: {}
+
+  # ── PersistentVolumeClaim ────────────────────────────────────────────────────
+  - kind: PersistentVolumeClaim
+    fields:
+      # Annotations written by the PV controller at bind time. Never in user YAML.
+      - metadata.annotations.pv\.kubernetes\.io/bind-completed
+      - metadata.annotations.pv\.kubernetes\.io/bound-by-controller
+      - metadata.annotations.volume\.kubernetes\.io/storage-provisioner
+      - metadata.annotations.volume\.beta\.kubernetes\.io/storage-provisioner
+      # Added by the pvc-protection controller. Matches the exact single-item list.
+      - path: metadata.finalizers
+        value:
+          - kubernetes.io/pvc-protection
+      - path: metadata.finalizers
+        omitempty: true
+      # Filled by the API server when the claim is bound. Never in user YAML.
+      - spec.volumeName
+      # Default mode. Block would be an explicit user choice.
+      - path: spec.volumeMode
+        value: Filesystem
 
   # ── Service ───────────────────────────────────────────────────────────────────
   - kind: Service
@@ -159,13 +194,15 @@ removeFields:
         value: TCP
 
       # Probe defaults (failureThreshold: 3, successThreshold: 1, timeoutSeconds: 1,
-      # httpGet.scheme: HTTP, tcpSocket.protocol: TCP).
+      # periodSeconds: 10, httpGet.scheme: HTTP, tcpSocket.protocol: TCP).
       - path: spec.template.spec.containers.livenessProbe.failureThreshold
         value: 3
       - path: spec.template.spec.containers.livenessProbe.successThreshold
         value: 1
       - path: spec.template.spec.containers.livenessProbe.timeoutSeconds
         value: 1
+      - path: spec.template.spec.containers.livenessProbe.periodSeconds
+        value: 10
       - path: spec.template.spec.containers.livenessProbe.httpGet.scheme
         value: HTTP
       - path: spec.template.spec.containers.livenessProbe.tcpSocket.protocol
@@ -176,6 +213,8 @@ removeFields:
         value: 1
       - path: spec.template.spec.containers.readinessProbe.timeoutSeconds
         value: 1
+      - path: spec.template.spec.containers.readinessProbe.periodSeconds
+        value: 10
       - path: spec.template.spec.containers.readinessProbe.httpGet.scheme
         value: HTTP
       - path: spec.template.spec.containers.readinessProbe.tcpSocket.protocol
@@ -186,6 +225,8 @@ removeFields:
         value: 1
       - path: spec.template.spec.containers.startupProbe.timeoutSeconds
         value: 1
+      - path: spec.template.spec.containers.startupProbe.periodSeconds
+        value: 10
       - path: spec.template.spec.containers.startupProbe.httpGet.scheme
         value: HTTP
       - path: spec.template.spec.containers.startupProbe.tcpSocket.protocol
@@ -204,12 +245,16 @@ removeFields:
       - path: spec.template.spec.securityContext
         value: {}
 
-      # Default imagePullPolicy for non-latest images. IfNotPresent is the
-      # Kubernetes default when the image tag is neither "latest" nor absent.
+      # Default imagePullPolicy. IfNotPresent is the default for pinned tags;
+      # Always is the default for "latest" (or absent) tags.
       - path: spec.template.spec.containers.imagePullPolicy
         value: IfNotPresent
       - path: spec.template.spec.initContainers.imagePullPolicy
         value: IfNotPresent
+      - path: spec.template.spec.containers.imagePullPolicy
+        value: Always
+      - path: spec.template.spec.initContainers.imagePullPolicy
+        value: Always
 
       # Empty container resources means no requests/limits are set.
       - path: spec.template.spec.containers.resources
@@ -222,6 +267,13 @@ removeFields:
         value: {}
       - path: spec.template.spec.tolerations
         value: []
+
+      # After stripping runtime labels/annotations the pod template metadata
+      # maps may be left empty. Remove them if so.
+      - path: spec.template.metadata.annotations
+        omitempty: true
+      - path: spec.template.metadata.labels
+        omitempty: true
 
   # ── StatefulSet ───────────────────────────────────────────────────────────────
   - group: apps
@@ -283,6 +335,8 @@ removeFields:
         value: 1
       - path: spec.template.spec.containers.livenessProbe.timeoutSeconds
         value: 1
+      - path: spec.template.spec.containers.livenessProbe.periodSeconds
+        value: 10
       - path: spec.template.spec.containers.livenessProbe.httpGet.scheme
         value: HTTP
       - path: spec.template.spec.containers.livenessProbe.tcpSocket.protocol
@@ -293,6 +347,8 @@ removeFields:
         value: 1
       - path: spec.template.spec.containers.readinessProbe.timeoutSeconds
         value: 1
+      - path: spec.template.spec.containers.readinessProbe.periodSeconds
+        value: 10
       - path: spec.template.spec.containers.readinessProbe.httpGet.scheme
         value: HTTP
       - path: spec.template.spec.containers.readinessProbe.tcpSocket.protocol
@@ -303,6 +359,8 @@ removeFields:
         value: 1
       - path: spec.template.spec.containers.startupProbe.timeoutSeconds
         value: 1
+      - path: spec.template.spec.containers.startupProbe.periodSeconds
+        value: 10
       - path: spec.template.spec.containers.startupProbe.httpGet.scheme
         value: HTTP
       - path: spec.template.spec.containers.startupProbe.tcpSocket.protocol
@@ -319,6 +377,10 @@ removeFields:
         value: IfNotPresent
       - path: spec.template.spec.initContainers.imagePullPolicy
         value: IfNotPresent
+      - path: spec.template.spec.containers.imagePullPolicy
+        value: Always
+      - path: spec.template.spec.initContainers.imagePullPolicy
+        value: Always
       - path: spec.template.spec.containers.resources
         value: {}
       - path: spec.template.spec.initContainers.resources
@@ -327,6 +389,16 @@ removeFields:
         value: {}
       - path: spec.template.spec.tolerations
         value: []
+      - path: spec.template.metadata.annotations
+        omitempty: true
+      - path: spec.template.metadata.labels
+        omitempty: true
+      # API server adds apiVersion, kind, and status to inline PVC templates.
+      - spec.volumeClaimTemplates.apiVersion
+      - spec.volumeClaimTemplates.kind
+      - spec.volumeClaimTemplates.status
+      - path: spec.volumeClaimTemplates.spec.volumeMode
+        value: Filesystem
 
   # ── DaemonSet ─────────────────────────────────────────────────────────────────
   - group: apps
@@ -378,6 +450,8 @@ removeFields:
         value: 1
       - path: spec.template.spec.containers.livenessProbe.timeoutSeconds
         value: 1
+      - path: spec.template.spec.containers.livenessProbe.periodSeconds
+        value: 10
       - path: spec.template.spec.containers.livenessProbe.httpGet.scheme
         value: HTTP
       - path: spec.template.spec.containers.livenessProbe.tcpSocket.protocol
@@ -388,6 +462,8 @@ removeFields:
         value: 1
       - path: spec.template.spec.containers.readinessProbe.timeoutSeconds
         value: 1
+      - path: spec.template.spec.containers.readinessProbe.periodSeconds
+        value: 10
       - path: spec.template.spec.containers.readinessProbe.httpGet.scheme
         value: HTTP
       - path: spec.template.spec.containers.readinessProbe.tcpSocket.protocol
@@ -398,6 +474,8 @@ removeFields:
         value: 1
       - path: spec.template.spec.containers.startupProbe.timeoutSeconds
         value: 1
+      - path: spec.template.spec.containers.startupProbe.periodSeconds
+        value: 10
       - path: spec.template.spec.containers.startupProbe.httpGet.scheme
         value: HTTP
       - path: spec.template.spec.containers.startupProbe.tcpSocket.protocol
@@ -414,6 +492,10 @@ removeFields:
         value: IfNotPresent
       - path: spec.template.spec.initContainers.imagePullPolicy
         value: IfNotPresent
+      - path: spec.template.spec.containers.imagePullPolicy
+        value: Always
+      - path: spec.template.spec.initContainers.imagePullPolicy
+        value: Always
       - path: spec.template.spec.containers.resources
         value: {}
       - path: spec.template.spec.initContainers.resources
@@ -422,6 +504,20 @@ removeFields:
         value: {}
       - path: spec.template.spec.tolerations
         value: []
+      - path: spec.template.metadata.annotations
+        omitempty: true
+      - path: spec.template.metadata.labels
+        omitempty: true
+
+  # ── NetworkPolicy ────────────────────────────────────────────────────────────
+  - group: networking.k8s.io
+    kind: NetworkPolicy
+    fields:
+      # Default protocol for NetworkPolicy port rules.
+      - path: spec.ingress.ports.protocol
+        value: TCP
+      - path: spec.egress.ports.protocol
+        value: TCP
 
   # ── RoleBinding / ClusterRoleBinding ──────────────────────────────────────────
   - group: rbac.authorization.k8s.io
