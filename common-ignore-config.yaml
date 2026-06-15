@@ -124,8 +124,10 @@ removeFields:
       # Default Service type. NodePort/LoadBalancer/ExternalName would be explicit.
       - path: spec.type
         value: ClusterIP
-      # Automatically defaulted targetPort or null targetPort/nodePort
-      - spec.ports.targetPort
+      # targetPort defaults to the same value as port; only remove it when it hasn't been set explicitly.
+      - path: spec.ports.targetPort
+        omitIfEqualToSibling: port
+      # nodePort is auto-assigned by the API server; user manifests rarely pin it.
       - spec.ports.nodePort
 
   # ── ConfigMap ─────────────────────────────────────────────────────────────────

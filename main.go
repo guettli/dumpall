@@ -142,8 +142,8 @@ type ignoreRuleFile struct {
 }
 
 // ignoreFieldEntryFile is a single entry in the fields list of a removeFields rule.
-// It is either a plain field path string, or a map with "path" and optional "value" or
-// "omitempty" keys. "omitempty" and "value" are mutually exclusive.
+// It is either a plain field path string, or a map with "path" and optional "value",
+// "omitempty", or "omitIfEqualToSibling" keys. All three optional keys are mutually exclusive.
 type ignoreFieldEntryFile struct {
 	Path             string
 	Value            any
@@ -152,6 +152,11 @@ type ignoreFieldEntryFile struct {
 	// slice, or an empty string — mirroring the json:",omitempty" / kubebuilder
 	// +optional convention. Mutually exclusive with a value constraint.
 	OmitEmpty bool
+	// OmitIfEqualToSibling removes the field only when its value equals the value of
+	// the named sibling field in the same map object. Useful for defaulted fields like
+	// spec.ports.targetPort which Kubernetes sets to the same value as spec.ports.port.
+	// Mutually exclusive with value and omitempty.
+	OmitIfEqualToSibling string
 }
 
 func (e *ignoreFieldEntryFile) UnmarshalYAML(value *yaml.Node) error {
@@ -160,7 +165,7 @@ func (e *ignoreFieldEntryFile) UnmarshalYAML(value *yaml.Node) error {
 		e.Path = value.Value
 		return nil
 	case yaml.MappingNode:
-		hasValue, hasOmitEmpty := false, false
+		hasValue, hasOmitEmpty, hasOmitIfEqualToSibling := false, false, false
 
 		for i := 0; i < len(value.Content)-1; i += 2 {
 			key := value.Content[i].Value
@@ -170,19 +175,30 @@ func (e *ignoreFieldEntryFile) UnmarshalYAML(value *yaml.Node) error {
 				hasValue = true
 			case "omitempty":
 				hasOmitEmpty = true
+			case "omitIfEqualToSibling":
+				hasOmitIfEqualToSibling = true
 			default:
-				return fmt.Errorf("unknown field %q in field entry (allowed: path, value, omitempty)", key)
+				return fmt.Errorf("unknown field %q in field entry (allowed: path, value, omitempty, omitIfEqualToSibling)", key)
 			}
 		}
 
-		if hasValue && hasOmitEmpty {
-			return fmt.Errorf("field entry cannot set both 'value' and 'omitempty'")
+		modifiers := 0
+
+		for _, has := range []bool{hasValue, hasOmitEmpty, hasOmitIfEqualToSibling} {
+			if has {
+				modifiers++
+			}
+		}
+
+		if modifiers > 1 {
+			return fmt.Errorf("field entry can only set one of 'value', 'omitempty', or 'omitIfEqualToSibling'")
 		}
 
 		var m struct {
-			Path      string `yaml:"path"`
-			Value     any    `yaml:"value"`
-			OmitEmpty bool   `yaml:"omitempty"`
+			Path                 string `yaml:"path"`
+			Value                any    `yaml:"value"`
+			OmitEmpty            bool   `yaml:"omitempty"`
+			OmitIfEqualToSibling string `yaml:"omitIfEqualToSibling"`
 		}
 
 		err := value.Decode(&m)
@@ -202,6 +218,14 @@ func (e *ignoreFieldEntryFile) UnmarshalYAML(value *yaml.Node) error {
 
 		e.OmitEmpty = m.OmitEmpty
 
+		if hasOmitIfEqualToSibling {
+			if strings.TrimSpace(m.OmitIfEqualToSibling) == "" {
+				return fmt.Errorf("field entry 'omitIfEqualToSibling' must not be empty")
+			}
+
+			e.OmitIfEqualToSibling = m.OmitIfEqualToSibling
+		}
+
 		return nil
 	case yaml.DocumentNode, yaml.SequenceNode, yaml.AliasNode:
 		return fmt.Errorf("field entry must be a string or a map with 'path', 'value', or 'omitempty' keys")
@@ -219,10 +243,11 @@ type ignoreRule struct {
 }
 
 type ignoreFieldPath struct {
-	segments         []string
-	value            any
-	valueConstrained bool
-	omitEmpty        bool
+	segments             []string
+	value                any
+	valueConstrained     bool
+	omitEmpty            bool
+	omitIfEqualToSibling string
 }
 
 type objectIdentity struct {
@@ -1526,10 +1551,11 @@ func compileIgnoreRule(fileRule ignoreRuleFile) (ignoreRule, error) {
 		}
 
 		fields = append(fields, ignoreFieldPath{
-			segments:         segments,
-			value:            field.Value,
-			valueConstrained: field.valueConstrained,
-			omitEmpty:        field.OmitEmpty,
+			segments:             segments,
+			value:                field.Value,
+			valueConstrained:     field.valueConstrained,
+			omitEmpty:            field.OmitEmpty,
+			omitIfEqualToSibling: field.OmitIfEqualToSibling,
 		})
 	}
 
@@ -1763,7 +1789,7 @@ func applyIgnoreRules(obj map[string]any, opts *options) {
 				continue
 			}
 
-			deleteFieldPath(obj, field.segments, field.value, field.valueConstrained, field.omitEmpty)
+			deleteFieldPath(obj, field.segments, field.value, field.valueConstrained, field.omitEmpty, field.omitIfEqualToSibling)
 		}
 	}
 }
@@ -1828,59 +1854,59 @@ func isManagedFieldsPath(segments []string) bool {
 	return len(segments) == 2 && segments[0] == fieldMetadata && segments[1] == "managedFields"
 }
 
-func deleteFieldPath(current any, segments []string, constraintValue any, constrained bool, omitEmpty bool) {
+func deleteFieldPath(current any, segments []string, constraintValue any, constrained bool, omitEmpty bool, omitIfEqualToSibling string) {
 	if len(segments) == 0 {
 		return
 	}
 
 	if segments[0] == deepWildcard {
-		deleteFieldPathRecursive(current, segments[1:], constraintValue, constrained, omitEmpty)
+		deleteFieldPathRecursive(current, segments[1:], constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 		return
 	}
 
 	switch typed := current.(type) {
 	case map[string]any:
-		deleteFieldPathFromMap(typed, segments, constraintValue, constrained, omitEmpty)
+		deleteFieldPathFromMap(typed, segments, constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 	case map[string]string:
 		deleteFieldPathFromStringMap(typed, segments, constraintValue, constrained, omitEmpty)
 	case []any:
 		for _, entry := range typed {
-			deleteFieldPath(entry, segments, constraintValue, constrained, omitEmpty)
+			deleteFieldPath(entry, segments, constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 		}
 	case []map[string]any:
 		for _, entry := range typed {
-			deleteFieldPath(entry, segments, constraintValue, constrained, omitEmpty)
+			deleteFieldPath(entry, segments, constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 		}
 	case []map[string]string:
 		for _, entry := range typed {
-			deleteFieldPath(entry, segments, constraintValue, constrained, omitEmpty)
+			deleteFieldPath(entry, segments, constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 		}
 	}
 }
 
-func deleteFieldPathRecursive(current any, remaining []string, constraintValue any, constrained bool, omitEmpty bool) {
+func deleteFieldPathRecursive(current any, remaining []string, constraintValue any, constrained bool, omitEmpty bool, omitIfEqualToSibling string) {
 	if len(remaining) == 0 {
 		return
 	}
 
-	deleteFieldPath(current, remaining, constraintValue, constrained, omitEmpty)
+	deleteFieldPath(current, remaining, constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 
 	switch typed := current.(type) {
 	case map[string]any:
 		for _, value := range typed {
-			deleteFieldPathRecursive(value, remaining, constraintValue, constrained, omitEmpty)
+			deleteFieldPathRecursive(value, remaining, constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 		}
 	case []any:
 		for _, entry := range typed {
-			deleteFieldPathRecursive(entry, remaining, constraintValue, constrained, omitEmpty)
+			deleteFieldPathRecursive(entry, remaining, constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 		}
 	case []map[string]any:
 		for _, entry := range typed {
-			deleteFieldPathRecursive(entry, remaining, constraintValue, constrained, omitEmpty)
+			deleteFieldPathRecursive(entry, remaining, constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 		}
 	case []map[string]string:
 		for _, entry := range typed {
-			deleteFieldPathRecursive(entry, remaining, constraintValue, constrained, omitEmpty)
+			deleteFieldPathRecursive(entry, remaining, constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 		}
 	}
 }
@@ -1897,11 +1923,20 @@ func shouldDeleteEntry(value, constraintValue any, constrained, omitEmpty bool) 
 	return true
 }
 
-func deleteFieldPathFromMap(current map[string]any, segments []string, constraintValue any, constrained bool, omitEmpty bool) {
+func shouldDeleteLeaf(current map[string]any, key string, constraintValue any, constrained bool, omitEmpty bool, omitIfEqualToSibling string) bool {
+	if omitIfEqualToSibling != "" {
+		sibling, ok := current[omitIfEqualToSibling]
+		return ok && valueMatches(current[key], sibling)
+	}
+
+	return shouldDeleteEntry(current[key], constraintValue, constrained, omitEmpty)
+}
+
+func deleteFieldPathFromMap(current map[string]any, segments []string, constraintValue any, constrained bool, omitEmpty bool, omitIfEqualToSibling string) {
 	keyPattern := segments[0]
 	if !hasFieldSegmentWildcard(keyPattern) {
 		if len(segments) == 1 {
-			if shouldDeleteEntry(current[keyPattern], constraintValue, constrained, omitEmpty) {
+			if shouldDeleteLeaf(current, keyPattern, constraintValue, constrained, omitEmpty, omitIfEqualToSibling) {
 				delete(current, keyPattern)
 			}
 
@@ -1913,7 +1948,7 @@ func deleteFieldPathFromMap(current map[string]any, segments []string, constrain
 			return
 		}
 
-		deleteFieldPath(next, segments[1:], constraintValue, constrained, omitEmpty)
+		deleteFieldPath(next, segments[1:], constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 
 		return
 	}
@@ -1924,14 +1959,14 @@ func deleteFieldPathFromMap(current map[string]any, segments []string, constrain
 		}
 
 		if len(segments) == 1 {
-			if shouldDeleteEntry(current[key], constraintValue, constrained, omitEmpty) {
+			if shouldDeleteLeaf(current, key, constraintValue, constrained, omitEmpty, omitIfEqualToSibling) {
 				delete(current, key)
 			}
 
 			continue
 		}
 
-		deleteFieldPath(next, segments[1:], constraintValue, constrained, omitEmpty)
+		deleteFieldPath(next, segments[1:], constraintValue, constrained, omitEmpty, omitIfEqualToSibling)
 	}
 }
 
