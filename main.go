@@ -626,10 +626,14 @@ func runDiff(args []string) error {
 		return fmt.Errorf("normalizing %s: %w", localDumpDir, err)
 	}
 
-	return compareDirs(tempA, labelA, tempB, localDumpDir)
+	return compareDirs(tempA, labelA, tempB, localDumpDir, strings.TrimSpace(readYamlFrom))
 }
 
-func compareDirs(dirA, labelA, dirB, labelB string) error {
+// compareDirs diffs two normalized dump directories using gotextdiff.
+// sourceA is the original source path for side A (empty when dumped from cluster).
+// When sourceA is set, a copy-pasteable "diff fileA fileB" line is printed; otherwise
+// only the relative path is printed (cluster files don't persist on disk).
+func compareDirs(dirA, labelA, dirB, labelB, sourceA string) error {
 	filesA, err := findYAMLFiles(dirA)
 	if err != nil {
 		return err
@@ -712,7 +716,11 @@ func compareDirs(dirA, labelA, dirB, labelB string) error {
 			if strA != strB {
 				hasDiffs = true
 
-				fmt.Printf("\n%s\n", rel)
+				if sourceA != "" {
+					fmt.Printf("\ndiff %s %s\n", filepath.Join(sourceA, rel), filepath.Join(labelB, rel))
+				} else {
+					fmt.Printf("\n%s\n", rel)
+				}
 
 				edits := myers.ComputeEdits(span.URIFromPath(absA), strA, strB)
 				diff := fmt.Sprint(gotextdiff.ToUnified(filepath.Join(labelA, rel), filepath.Join(labelB, rel), strA, edits))
