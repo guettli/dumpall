@@ -717,11 +717,13 @@ func compareDirs(dirA, labelA, dirB, labelB, sourceA string) error {
 
 		switch {
 		case inA && !inB:
-			fmt.Printf("only in %s: %s\n", labelA, rel)
+			// File exists in cluster (new) but not in local (old): new file.
+			fmt.Printf("new in %s: %s\n", labelA, rel)
 
 			hasDiffs = true
 		case !inA && inB:
-			fmt.Printf("only in %s: %s\n", labelB, rel)
+			// File exists in local (old) but not in cluster (new): deleted file.
+			fmt.Printf("deleted from %s: %s\n", labelA, rel)
 
 			hasDiffs = true
 		default:
@@ -735,20 +737,21 @@ func compareDirs(dirA, labelA, dirB, labelB, sourceA string) error {
 				return fmt.Errorf("failed to read %s: %w", absB, err)
 			}
 
-			strA := string(contentA)
-			strB := string(contentB)
+			// local (B) is old/from (---), cluster (A) is new/to (+++).
+			strOld := string(contentB)
+			strNew := string(contentA)
 
-			if strA != strB {
+			if strOld != strNew {
 				hasDiffs = true
 
 				if sourceA != "" {
-					fmt.Printf("\ndiff %s %s\n", filepath.Join(sourceA, rel), filepath.Join(labelB, rel))
+					fmt.Printf("\ndiff %s %s\n", filepath.Join(labelB, rel), filepath.Join(sourceA, rel))
 				} else {
 					fmt.Printf("\n%s\n", rel)
 				}
 
-				edits := myers.ComputeEdits(span.URIFromPath(absA), strA, strB)
-				diff := fmt.Sprint(gotextdiff.ToUnified(filepath.Join(labelA, rel), filepath.Join(labelB, rel), strA, edits))
+				edits := myers.ComputeEdits(span.URIFromPath(absB), strOld, strNew)
+				diff := fmt.Sprint(gotextdiff.ToUnified(filepath.Join(labelB, rel), filepath.Join(labelA, rel), strOld, edits))
 				fmt.Print(diff)
 			}
 		}
