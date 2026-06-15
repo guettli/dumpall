@@ -124,6 +124,16 @@ removeFields:
       # Default Service type. NodePort/LoadBalancer/ExternalName would be explicit.
       - path: spec.type
         value: ClusterIP
+      # Automatically defaulted targetPort or null targetPort/nodePort
+      - spec.ports.targetPort
+      - spec.ports.nodePort
+
+  # ── ConfigMap ─────────────────────────────────────────────────────────────────
+  - kind: ConfigMap
+    fields:
+      # Empty data maps are equivalent to absent data.
+      - path: data
+        value: {}
 
   # ── Deployment ────────────────────────────────────────────────────────────────
   - group: apps
@@ -268,6 +278,30 @@ removeFields:
       - path: spec.template.spec.tolerations
         value: []
 
+      # Default limits, volumeMounts, and affinity
+      - path: spec.template.spec.containers.resources.limits
+        value: {}
+      - path: spec.template.spec.initContainers.resources.limits
+        value: {}
+      - path: spec.template.spec.containers.volumeMounts
+        value: null
+      - path: spec.template.spec.initContainers.volumeMounts
+        value: null
+      - path: spec.template.spec.containers.volumeMounts.subPath
+        value: null
+      - path: spec.template.spec.initContainers.volumeMounts.subPath
+        value: null
+      - path: spec.template.spec.affinity.nodeAffinity
+        value: null
+      - path: spec.template.spec.affinity.podAffinity
+        value: null
+      - path: spec.template.spec.hostNetwork
+        value: false
+      - path: spec.template.spec.securityContext.supplementalGroups
+        value: []
+      - path: spec.template.spec.securityContext.sysctls
+        value: []
+
       # After stripping runtime labels/annotations the pod template metadata
       # maps may be left empty. Remove them if so.
       - path: spec.template.metadata.annotations
@@ -389,6 +423,30 @@ removeFields:
         value: {}
       - path: spec.template.spec.tolerations
         value: []
+
+      # Default limits, volumeMounts, and affinity
+      - path: spec.template.spec.containers.resources.limits
+        value: {}
+      - path: spec.template.spec.initContainers.resources.limits
+        value: {}
+      - path: spec.template.spec.containers.volumeMounts
+        value: null
+      - path: spec.template.spec.initContainers.volumeMounts
+        value: null
+      - path: spec.template.spec.containers.volumeMounts.subPath
+        value: null
+      - path: spec.template.spec.initContainers.volumeMounts.subPath
+        value: null
+      - path: spec.template.spec.affinity.nodeAffinity
+        value: null
+      - path: spec.template.spec.affinity.podAffinity
+        value: null
+      - path: spec.template.spec.hostNetwork
+        value: false
+      - path: spec.template.spec.securityContext.supplementalGroups
+        value: []
+      - path: spec.template.spec.securityContext.sysctls
+        value: []
       - path: spec.template.metadata.annotations
         omitempty: true
       - path: spec.template.metadata.labels
@@ -492,10 +550,6 @@ removeFields:
         value: IfNotPresent
       - path: spec.template.spec.initContainers.imagePullPolicy
         value: IfNotPresent
-      - path: spec.template.spec.containers.imagePullPolicy
-        value: Always
-      - path: spec.template.spec.initContainers.imagePullPolicy
-        value: Always
       - path: spec.template.spec.containers.resources
         value: {}
       - path: spec.template.spec.initContainers.resources
@@ -503,6 +557,30 @@ removeFields:
       - path: spec.template.spec.nodeSelector
         value: {}
       - path: spec.template.spec.tolerations
+        value: []
+
+      # Default limits, volumeMounts, and affinity
+      - path: spec.template.spec.containers.resources.limits
+        value: {}
+      - path: spec.template.spec.initContainers.resources.limits
+        value: {}
+      - path: spec.template.spec.containers.volumeMounts
+        value: null
+      - path: spec.template.spec.initContainers.volumeMounts
+        value: null
+      - path: spec.template.spec.containers.volumeMounts.subPath
+        value: null
+      - path: spec.template.spec.initContainers.volumeMounts.subPath
+        value: null
+      - path: spec.template.spec.affinity.nodeAffinity
+        value: null
+      - path: spec.template.spec.affinity.podAffinity
+        value: null
+      - path: spec.template.spec.hostNetwork
+        value: false
+      - path: spec.template.spec.securityContext.supplementalGroups
+        value: []
+      - path: spec.template.spec.securityContext.sysctls
         value: []
       - path: spec.template.metadata.annotations
         omitempty: true
@@ -527,3 +605,48 @@ removeFields:
       # implicit default). Helm-rendered manifests often include it explicitly.
       - path: subjects.apiGroup
         value: ""
+
+skipResources:
+  # Ephemeral metrics resources
+  - group: metrics.k8s.io
+    kind: PodMetrics
+  - group: metrics.k8s.io
+    kind: NodeMetrics
+
+  # Runtime Pod resources (usually managed by Deployments/StatefulSets/DaemonSets)
+  - kind: Pod
+
+  # Node resources (representing physical/virtual machines)
+  - kind: Node
+
+  # IP address allocations
+  - group: networking.k8s.io
+    kind: IPAddress
+
+  # Volume attachments created dynamically by the PV controller
+  - group: storage.k8s.io
+    kind: VolumeAttachment
+
+  # CertificateSigningRequest resources
+  - group: certificates.k8s.io
+    kind: CertificateSigningRequest
+
+  # Controller revisions (history of DaemonSets/StatefulSets)
+  - group: apps
+    kind: ControllerRevision
+
+  # Cert-manager transient validation resources
+  - group: cert-manager.io
+    kind: CertificateRequest
+  - group: acme.cert-manager.io
+    kind: Order
+  - group: acme.cert-manager.io
+    kind: Challenge
+
+  # Automatically injected root CA certificate configmap
+  - kind: ConfigMap
+    name: kube-root-ca.crt
+
+  # Helm release metadata secrets
+  - kind: Secret
+    name: "sh.helm.release.v1.*"
