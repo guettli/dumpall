@@ -295,7 +295,8 @@ func (v *pathValue) Set(s string) error { *v = pathValue(s); return nil }
 func (v *pathValue) Type() string       { return "path" }
 
 func main() {
-	if err := buildRootCmd().Execute(); err != nil {
+	err := buildRootCmd().Execute()
+	if err != nil {
 		os.Exit(1)
 	}
 }
@@ -309,7 +310,7 @@ func buildRootCmd() *cobra.Command {
 		Long:         "Read resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			opts.readYamlFrom = strings.TrimSpace(opts.readYamlFrom)
 
 			opts.dir = strings.TrimSpace(opts.dir)
@@ -317,6 +318,7 @@ func buildRootCmd() *cobra.Command {
 				if opts.readYamlFrom != "" {
 					return fmt.Errorf("--dir and --read-yaml-from are mutually exclusive")
 				}
+
 				opts.readYamlFrom = opts.dir
 			}
 
@@ -325,17 +327,20 @@ func buildRootCmd() *cobra.Command {
 				if opts.readYamlFrom != "" {
 					return fmt.Errorf("--file-name (-f) and --read-yaml-from are mutually exclusive")
 				}
+
 				opts.readYamlFrom = opts.fileName
 			}
 
 			opts.readResourceNamesFrom = strings.TrimSpace(opts.readResourceNamesFrom)
 
-			if err := finalizeOpts(opts); err != nil {
+			err := finalizeOpts(opts)
+			if err != nil {
 				return err
 			}
 
 			if opts.removeOutdir {
-				if err := os.RemoveAll(opts.outputDir); err != nil {
+				err := os.RemoveAll(opts.outputDir)
+				if err != nil {
 					return fmt.Errorf("failed to remove out-dir %s: %w", opts.outputDir, err)
 				}
 			}
@@ -380,7 +385,7 @@ func buildShowCommonIgnoreConfigCmd() *cobra.Command {
 		Short:        "Print the embedded common ignore config",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			return writeCommonIgnoreConfig(os.Stdout)
 		},
 	}
@@ -392,7 +397,7 @@ func buildVersionCmd() *cobra.Command {
 		Short:        "Print the version",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, _ []string) error {
 			fmt.Println(getBuildVersion())
 			return nil
 		},
@@ -405,16 +410,23 @@ func buildGendocsCmd() *cobra.Command {
 		Short:        "Generate usage.md from the command tree",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			b := &bytes.Buffer{}
-			if err := cobradoc.WriteDocument(b, cmd.Root(), cobradoc.Markdown, cobradoc.Options{}); err != nil {
-				return err
+
+			err := cobradoc.WriteDocument(b, cmd.Root(), cobradoc.Markdown, cobradoc.Options{})
+			if err != nil {
+				return fmt.Errorf("generating docs: %w", err)
 			}
+
 			usageFile := "usage.md"
-			if err := os.WriteFile(usageFile, b.Bytes(), 0o600); err != nil {
-				return err
+
+			err = os.WriteFile(usageFile, b.Bytes(), 0o600)
+			if err != nil {
+				return fmt.Errorf("writing %s: %w", usageFile, err)
 			}
+
 			fmt.Printf("Created %q\n", usageFile)
+
 			return nil
 		},
 	}
@@ -562,7 +574,7 @@ func buildDiffCmd() *cobra.Command {
 		Long:         "Diff the current cluster state against a local dump directory.\nBoth sides are normalized before comparing (common ignore config applied by default).",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, args []string) error {
 			return runDiffCore(d, args[0])
 		},
 	}
@@ -607,7 +619,8 @@ func runDiff(args []string) error {
 		fs.PrintDefaults()
 	}
 
-	if err := fs.Parse(args); err != nil {
+	err := fs.Parse(args)
+	if err != nil {
 		return fmt.Errorf("parsing flags: %w", err)
 	}
 
@@ -706,7 +719,7 @@ func buildCheckNormalizedCmd() *cobra.Command {
 		Long:         "Check whether a YAML file or directory is already normalized.\nExits 0 if already normalized, 1 if normalization would change it.",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
+		RunE: func(_ *cobra.Command, args []string) error {
 			return runCheckNormalizedCore(c, args[0])
 		},
 	}
