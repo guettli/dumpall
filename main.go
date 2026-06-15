@@ -354,6 +354,19 @@ func main() {
 		os.Exit(0)
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "check-normalized" {
+		err := runCheckNormalized(os.Args[2:])
+		if err != nil {
+			if !errors.Is(err, errDiffsFound) {
+				fmt.Fprintln(os.Stderr, err)
+			}
+
+			os.Exit(1)
+		}
+
+		os.Exit(0)
+	}
+
 	err := mainWithError()
 	if err != nil {
 		fmt.Println(err)
@@ -560,17 +573,17 @@ func runDiff(args []string) error {
 	fs.SetOutput(os.Stderr)
 
 	var (
-		readYamlFrom          string
-		namespacesCSV         string
-		kindFilterCSV         string
-		nameRegex             string
-		skipNameGlob          string
-		excludeNamespacesCSV  string
-		ignoreConfigFile      string
-		dumpSecrets           bool
-		skipOwned             bool
-		quiet                 bool
-		noCommonIgnoreConfig  bool
+		readYamlFrom         string
+		namespacesCSV        string
+		kindFilterCSV        string
+		nameRegex            string
+		skipNameGlob         string
+		excludeNamespacesCSV string
+		ignoreConfigFile     string
+		dumpSecrets          bool
+		skipOwned            bool
+		quiet                bool
+		noCommonIgnoreConfig bool
 	)
 
 	fs.StringVar(&readYamlFrom, "read-yaml-from", "", "Read YAML from file/dir (source A) instead of connecting to cluster")
@@ -664,6 +677,113 @@ func runDiff(args []string) error {
 	}
 
 	return compareDirs(tempA, labelA, tempB, localDumpDir, strings.TrimSpace(readYamlFrom))
+}
+
+func runCheckNormalized(args []string) error {
+	fs := pflag.NewFlagSet("check-normalized", pflag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+
+	var (
+		namespacesCSV        string
+		kindFilterCSV        string
+		nameRegex            string
+		skipNameGlob         string
+		excludeNamespacesCSV string
+		ignoreConfigFile     string
+		dumpSecrets          bool
+		skipOwned            bool
+		quiet                bool
+		noCommonIgnoreConfig bool
+	)
+
+	fs.StringVarP(&namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to filter")
+	fs.StringVar(&kindFilterCSV, "kind", "", "Comma-separated list of kind globs to filter (e.g. 'ConfigMap,Secret')")
+	fs.StringVarP(&nameRegex, "name-regex", "x", "", "Only check resources where metadata.name matches this regex")
+	fs.StringVar(&skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob")
+	fs.StringVar(&excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to exclude")
+	fs.Var((*fileValue)(&ignoreConfigFile), "ignore-config", "Path to a YAML file with additional ignore rules")
+	fs.BoolVar(&noCommonIgnoreConfig, "no-common-ignore-config", false, "Disable the embedded common ignore config")
+	fs.BoolVarP(&dumpSecrets, "dump-secrets", "s", false, "Include secret values")
+	fs.BoolVarP(&skipOwned, "skip-owned", "O", false, "Skip resources with a controlling owner reference")
+	fs.BoolVarP(&quiet, "quiet", "q", true, "Suppress progress output")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: %s check-normalized [flags] <yaml-file-or-dir>\n\nCheck whether a YAML file or directory is already normalized.\nExits 0 if already normalized, 1 if normalization would change it.\n\nFlags:\n", toolNameForUsageOutput)
+		fs.PrintDefaults()
+	}
+
+	err := fs.Parse(args)
+	if err != nil {
+		return fmt.Errorf("parsing flags: %w", err)
+	}
+
+	if len(fs.Args()) != 1 {
+		fs.Usage()
+		return fmt.Errorf("check-normalized requires exactly one positional argument")
+	}
+
+	inputPath := fs.Args()[0]
+
+	// tempRaw: restructured without any ignore rules (the "before" side)
+	tempRaw, err := os.MkdirTemp("", "dumpall-raw-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+
+	defer os.RemoveAll(tempRaw)
+
+	// tempNorm: restructured with ignore rules applied (the "after" side)
+	tempNorm, err := os.MkdirTemp("", "dumpall-norm-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+
+	defer os.RemoveAll(tempNorm)
+
+	buildOpts := func(outputDir string, useCommon bool, customConfig string) *options {
+		return &options{
+			outputDir:             outputDir,
+			readYamlFrom:          strings.TrimSpace(inputPath),
+			namespacesCSV:         namespacesCSV,
+			kindFilterCSV:         kindFilterCSV,
+			nameRegex:             nameRegex,
+			skipNameGlob:          skipNameGlob,
+			excludeNamespacesCSV:  excludeNamespacesCSV,
+			ignoreConfigFile:      customConfig,
+			dumpSecrets:           dumpSecrets,
+			skipOwned:             skipOwned,
+			ignoreConfigUseCommon: useCommon,
+			quiet:                 quiet,
+			overwriteOutdir:       true,
+		}
+	}
+
+	optsRaw := buildOpts(tempRaw, false, "")
+
+	err = finalizeOpts(optsRaw)
+	if err != nil {
+		return fmt.Errorf("configuring raw pass: %w", err)
+	}
+
+	err = runDump(optsRaw)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", inputPath, err)
+	}
+
+	optsNorm := buildOpts(tempNorm, !noCommonIgnoreConfig, ignoreConfigFile)
+
+	err = finalizeOpts(optsNorm)
+	if err != nil {
+		return fmt.Errorf("configuring normalized pass: %w", err)
+	}
+
+	err = runDump(optsNorm)
+	if err != nil {
+		return fmt.Errorf("normalizing %s: %w", inputPath, err)
+	}
+
+	// raw = old (---), normalized = new (+++) so removed fields show as - lines
+	return compareDirs(tempNorm, "normalized", tempRaw, inputPath, "")
 }
 
 // compareDirs diffs two normalized dump directories using gotextdiff.
