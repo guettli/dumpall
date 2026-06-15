@@ -263,10 +263,6 @@ removeFields:
         value: IfNotPresent
       - path: spec.template.spec.initContainers.imagePullPolicy
         value: IfNotPresent
-      - path: spec.template.spec.containers.imagePullPolicy
-        value: Always
-      - path: spec.template.spec.initContainers.imagePullPolicy
-        value: Always
 
       # Empty container resources means no requests/limits are set.
       - path: spec.template.spec.containers.resources
