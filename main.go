@@ -22,6 +22,7 @@ import (
 	"github.com/hexops/gotextdiff"
 	"github.com/hexops/gotextdiff/myers"
 	"github.com/hexops/gotextdiff/span"
+	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -29,7 +30,6 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/clientcmd"
-	"sigs.k8s.io/cluster-api/cmd/clusterctl/cmd"
 	"sigs.k8s.io/kustomize/kyaml/kio"
 	yaml "sigs.k8s.io/yaml/goyaml.v3"
 )
@@ -295,158 +295,129 @@ func (v *pathValue) Set(s string) error { *v = pathValue(s); return nil }
 func (v *pathValue) Type() string       { return "path" }
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "gendocs" {
-		b := &bytes.Buffer{}
-
-		err := cobradoc.WriteDocument(b, cmd.RootCmd, cobradoc.Markdown, cobradoc.Options{})
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-
-		usageFile := "usage.md"
-
-		err = os.WriteFile(usageFile, b.Bytes(), 0o600)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-
-		fmt.Printf("Created %q\n", usageFile)
-		os.Exit(0)
-	}
-
-	if len(os.Args) > 1 && os.Args[1] == "show-common-ignore-config" {
-		if len(os.Args) > 2 {
-			fmt.Printf("show-common-ignore-config does not accept arguments: %v\n", os.Args[2:])
-			os.Exit(1)
-		}
-
-		err := writeCommonIgnoreConfig(os.Stdout)
-		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
-		}
-
-		os.Exit(0)
-	}
-
-	if len(os.Args) > 1 && os.Args[1] == "version" {
-		if len(os.Args) > 2 {
-			fmt.Printf("version does not accept arguments: %v\n", os.Args[2:])
-			os.Exit(1)
-		}
-
-		fmt.Println(getBuildVersion())
-		os.Exit(0)
-	}
-
-	if len(os.Args) > 1 && os.Args[1] == "diff" {
-		err := runDiff(os.Args[2:])
-		if err != nil {
-			if !errors.Is(err, errDiffsFound) {
-				fmt.Fprintln(os.Stderr, err)
-			}
-
-			os.Exit(1)
-		}
-
-		os.Exit(0)
-	}
-
-	if len(os.Args) > 1 && os.Args[1] == "check-normalized" {
-		err := runCheckNormalized(os.Args[2:])
-		if err != nil {
-			if !errors.Is(err, errDiffsFound) {
-				fmt.Fprintln(os.Stderr, err)
-			}
-
-			os.Exit(1)
-		}
-
-		os.Exit(0)
-	}
-
-	err := mainWithError()
-	if err != nil {
-		fmt.Println(err)
+	if err := buildRootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
 }
 
-func mainWithError() error {
+func buildRootCmd() *cobra.Command {
 	opts := &options{outputDir: "out"}
-	pflag.VarP((*dirValue)(&opts.outputDir), "out-dir", "o", "Output directory (must not exist)")
-	pflag.BoolVarP(&opts.quiet, "quiet", "q", false, "Quiet, suppress output")
-	pflag.BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
-	pflag.BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
-	pflag.BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
-	pflag.BoolVarP(&opts.skipOwned, "skip-owned", "O", false, "Skip resources that have a controlling owner reference (e.g., Pods owned by a ReplicaSet) or that Kubernetes autogenerates from other resources (e.g., aggregated ClusterRoles)")
-	pflag.BoolVar(&opts.ignoreConfigUseCommon, "ignore-config-use-common", false, "Use the embedded common ignore config")
-	pflag.Var((*fileValue)(&opts.ignoreConfigFile), "ignore-config", "Path to a YAML file with ignore rules")
-	pflag.StringVarP(&opts.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to dump")
-	pflag.StringVar(&opts.kindFilterCSV, "kind", "", "Comma-separated list of kind globs to dump (e.g. 'ConfigMap,Secret,Cluster*')")
-	pflag.StringVarP(&opts.nameRegex, "name-regex", "x", "", "Only dump resources where metadata.name matches this regex")
-	pflag.StringVar(&opts.skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob (e.g. 'foo-*' skips names starting with 'foo-')")
-	pflag.StringVar(&opts.excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to fully exclude (e.g. 'foo-*,test-*'). Drops the Namespace object plus all resources inside; uses fieldSelector to skip those namespaces api-server-side")
-	pflag.Var((*pathValue)(&opts.readYamlFrom), "read-yaml-from", "Read YAML manifests from a file or directory instead of connecting to the api-server. Useful for normalizing existing YAML files for better diffing.")
-	pflag.Var((*pathValue)(&opts.readResourceNamesFrom), "read-resource-names-from", "Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources from the api-server.")
-	pflag.StringVar(&opts.comment, "comment", "", "Additional comment line to add at the top of each output YAML file")
-	pflag.StringVarP(&opts.fileName, "file-name", "f", "", "Alias for --read-yaml-from (hidden)")
 
-	_ = pflag.CommandLine.MarkHidden("file-name")
+	rootCmd := &cobra.Command{
+		Use:          toolNameForUsageOutput,
+		Short:        "Dump all Kubernetes resources to YAML files",
+		Long:         "Read resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.readYamlFrom = strings.TrimSpace(opts.readYamlFrom)
 
-	pflag.StringVar(&opts.dir, "dir", "", "Alias for --read-yaml-from (hidden)")
+			opts.dir = strings.TrimSpace(opts.dir)
+			if opts.dir != "" {
+				if opts.readYamlFrom != "" {
+					return fmt.Errorf("--dir and --read-yaml-from are mutually exclusive")
+				}
+				opts.readYamlFrom = opts.dir
+			}
 
-	_ = pflag.CommandLine.MarkHidden("dir")
+			opts.fileName = strings.TrimSpace(opts.fileName)
+			if opts.fileName != "" {
+				if opts.readYamlFrom != "" {
+					return fmt.Errorf("--file-name (-f) and --read-yaml-from are mutually exclusive")
+				}
+				opts.readYamlFrom = opts.fileName
+			}
 
-	pflag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s\nRead resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n  diff <local-dump-dir>       Diff current cluster state against a local dump\n  version                     Print the version\n", toolNameForUsageOutput)
-		pflag.PrintDefaults()
+			opts.readResourceNamesFrom = strings.TrimSpace(opts.readResourceNamesFrom)
+
+			if err := finalizeOpts(opts); err != nil {
+				return err
+			}
+
+			if opts.removeOutdir {
+				if err := os.RemoveAll(opts.outputDir); err != nil {
+					return fmt.Errorf("failed to remove out-dir %s: %w", opts.outputDir, err)
+				}
+			}
+
+			return runDump(opts)
+		},
 	}
 
-	pflag.Parse()
+	rootCmd.Flags().VarP((*dirValue)(&opts.outputDir), "out-dir", "o", "Output directory (must not exist)")
+	rootCmd.Flags().BoolVarP(&opts.quiet, "quiet", "q", false, "Quiet, suppress output")
+	rootCmd.Flags().BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
+	rootCmd.Flags().BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
+	rootCmd.Flags().BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
+	rootCmd.Flags().BoolVarP(&opts.skipOwned, "skip-owned", "O", false, "Skip resources that have a controlling owner reference (e.g., Pods owned by a ReplicaSet) or that Kubernetes autogenerates from other resources (e.g., aggregated ClusterRoles)")
+	rootCmd.Flags().BoolVar(&opts.ignoreConfigUseCommon, "ignore-config-use-common", false, "Use the embedded common ignore config")
+	rootCmd.Flags().Var((*fileValue)(&opts.ignoreConfigFile), "ignore-config", "Path to a YAML file with ignore rules")
+	rootCmd.Flags().StringVarP(&opts.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to dump")
+	rootCmd.Flags().StringVar(&opts.kindFilterCSV, "kind", "", "Comma-separated list of kind globs to dump (e.g. 'ConfigMap,Secret,Cluster*')")
+	rootCmd.Flags().StringVarP(&opts.nameRegex, "name-regex", "x", "", "Only dump resources where metadata.name matches this regex")
+	rootCmd.Flags().StringVar(&opts.skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob (e.g. 'foo-*' skips names starting with 'foo-')")
+	rootCmd.Flags().StringVar(&opts.excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to fully exclude (e.g. 'foo-*,test-*'). Drops the Namespace object plus all resources inside; uses fieldSelector to skip those namespaces api-server-side")
+	rootCmd.Flags().Var((*pathValue)(&opts.readYamlFrom), "read-yaml-from", "Read YAML manifests from a file or directory instead of connecting to the api-server. Useful for normalizing existing YAML files for better diffing.")
+	rootCmd.Flags().Var((*pathValue)(&opts.readResourceNamesFrom), "read-resource-names-from", "Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources from the api-server.")
+	rootCmd.Flags().StringVar(&opts.comment, "comment", "", "Additional comment line to add at the top of each output YAML file")
+	rootCmd.Flags().StringVarP(&opts.fileName, "file-name", "f", "", "Alias for --read-yaml-from (hidden)")
+	rootCmd.Flags().StringVar(&opts.dir, "dir", "", "Alias for --read-yaml-from (hidden)")
+	_ = rootCmd.Flags().MarkHidden("file-name")
+	_ = rootCmd.Flags().MarkHidden("dir")
 
-	if len(pflag.Args()) > 0 {
-		pflag.Usage()
-		return fmt.Errorf("unexpected positional arguments: %v", pflag.Args())
+	rootCmd.AddCommand(buildDiffCmd())
+	rootCmd.AddCommand(buildCheckNormalizedCmd())
+	rootCmd.AddCommand(buildShowCommonIgnoreConfigCmd())
+	rootCmd.AddCommand(buildVersionCmd())
+	rootCmd.AddCommand(buildGendocsCmd())
+
+	return rootCmd
+}
+
+func buildShowCommonIgnoreConfigCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "show-common-ignore-config",
+		Short:        "Print the embedded common ignore config",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return writeCommonIgnoreConfig(os.Stdout)
+		},
 	}
+}
 
-	opts.readYamlFrom = strings.TrimSpace(opts.readYamlFrom)
-
-	opts.dir = strings.TrimSpace(opts.dir)
-	if opts.dir != "" {
-		if opts.readYamlFrom != "" {
-			return fmt.Errorf("--dir and --read-yaml-from are mutually exclusive")
-		}
-
-		opts.readYamlFrom = opts.dir
+func buildVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "version",
+		Short:        "Print the version",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			fmt.Println(getBuildVersion())
+			return nil
+		},
 	}
+}
 
-	opts.fileName = strings.TrimSpace(opts.fileName)
-	if opts.fileName != "" {
-		if opts.readYamlFrom != "" {
-			return fmt.Errorf("--file-name (-f) and --read-yaml-from are mutually exclusive")
-		}
-
-		opts.readYamlFrom = opts.fileName
+func buildGendocsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "gendocs",
+		Short:        "Generate usage.md from the command tree",
+		SilenceUsage: true,
+		Args:         cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			b := &bytes.Buffer{}
+			if err := cobradoc.WriteDocument(b, cmd.Root(), cobradoc.Markdown, cobradoc.Options{}); err != nil {
+				return err
+			}
+			usageFile := "usage.md"
+			if err := os.WriteFile(usageFile, b.Bytes(), 0o600); err != nil {
+				return err
+			}
+			fmt.Printf("Created %q\n", usageFile)
+			return nil
+		},
 	}
-
-	opts.readResourceNamesFrom = strings.TrimSpace(opts.readResourceNamesFrom)
-
-	err := finalizeOpts(opts)
-	if err != nil {
-		return err
-	}
-
-	if opts.removeOutdir {
-		err := os.RemoveAll(opts.outputDir)
-		if err != nil {
-			return fmt.Errorf("failed to remove out-dir %s: %w", opts.outputDir, err)
-		}
-	}
-
-	return runDump(opts)
 }
 
 func finalizeOpts(opts *options) error {
@@ -568,43 +539,75 @@ func runDump(opts *options) error {
 
 var errDiffsFound = errors.New("differences found")
 
+type diffOpts struct {
+	readYamlFrom         string
+	namespacesCSV        string
+	kindFilterCSV        string
+	nameRegex            string
+	skipNameGlob         string
+	excludeNamespacesCSV string
+	ignoreConfigFile     string
+	dumpSecrets          bool
+	skipOwned            bool
+	quiet                bool
+	noCommonIgnoreConfig bool
+}
+
+func buildDiffCmd() *cobra.Command {
+	var d diffOpts
+
+	cmd := &cobra.Command{
+		Use:          "diff <local-dump-dir>",
+		Short:        "Diff the current cluster state against a local dump",
+		Long:         "Diff the current cluster state against a local dump directory.\nBoth sides are normalized before comparing (common ignore config applied by default).",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDiffCore(d, args[0])
+		},
+	}
+
+	cmd.Flags().StringVar(&d.readYamlFrom, "read-yaml-from", "", "Read YAML from file/dir (source A) instead of connecting to cluster")
+	cmd.Flags().StringVarP(&d.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to compare")
+	cmd.Flags().StringVar(&d.kindFilterCSV, "kind", "", "Comma-separated list of kind globs to compare (e.g. 'ConfigMap,Secret')")
+	cmd.Flags().StringVarP(&d.nameRegex, "name-regex", "x", "", "Only compare resources where metadata.name matches this regex")
+	cmd.Flags().StringVar(&d.skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob")
+	cmd.Flags().StringVar(&d.excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to exclude")
+	cmd.Flags().Var((*fileValue)(&d.ignoreConfigFile), "ignore-config", "Path to a YAML file with ignore rules")
+	cmd.Flags().BoolVar(&d.noCommonIgnoreConfig, "no-common-ignore-config", false, "Disable the embedded common ignore config (compare raw resources)")
+	cmd.Flags().BoolVarP(&d.dumpSecrets, "dump-secrets", "s", false, "Include secret values in comparison")
+	cmd.Flags().BoolVarP(&d.skipOwned, "skip-owned", "O", false, "Skip resources with a controlling owner reference")
+	cmd.Flags().BoolVarP(&d.quiet, "quiet", "q", true, "Suppress progress output")
+
+	return cmd
+}
+
+// runDiff parses raw flag args and delegates to runDiffCore.
+// Kept for direct test calls (e.g. runDiff([]string{"--read-yaml-from", ...})).
 func runDiff(args []string) error {
 	fs := pflag.NewFlagSet("diff", pflag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 
-	var (
-		readYamlFrom         string
-		namespacesCSV        string
-		kindFilterCSV        string
-		nameRegex            string
-		skipNameGlob         string
-		excludeNamespacesCSV string
-		ignoreConfigFile     string
-		dumpSecrets          bool
-		skipOwned            bool
-		quiet                bool
-		noCommonIgnoreConfig bool
-	)
+	var d diffOpts
 
-	fs.StringVar(&readYamlFrom, "read-yaml-from", "", "Read YAML from file/dir (source A) instead of connecting to cluster")
-	fs.StringVarP(&namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to compare")
-	fs.StringVar(&kindFilterCSV, "kind", "", "Comma-separated list of kind globs to compare (e.g. 'ConfigMap,Secret')")
-	fs.StringVarP(&nameRegex, "name-regex", "x", "", "Only compare resources where metadata.name matches this regex")
-	fs.StringVar(&skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob")
-	fs.StringVar(&excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to exclude")
-	fs.Var((*fileValue)(&ignoreConfigFile), "ignore-config", "Path to a YAML file with ignore rules")
-	fs.BoolVar(&noCommonIgnoreConfig, "no-common-ignore-config", false, "Disable the embedded common ignore config (compare raw resources)")
-	fs.BoolVarP(&dumpSecrets, "dump-secrets", "s", false, "Include secret values in comparison")
-	fs.BoolVarP(&skipOwned, "skip-owned", "O", false, "Skip resources with a controlling owner reference")
-	fs.BoolVarP(&quiet, "quiet", "q", true, "Suppress progress output")
+	fs.StringVar(&d.readYamlFrom, "read-yaml-from", "", "Read YAML from file/dir (source A) instead of connecting to cluster")
+	fs.StringVarP(&d.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to compare")
+	fs.StringVar(&d.kindFilterCSV, "kind", "", "Comma-separated list of kind globs to compare (e.g. 'ConfigMap,Secret')")
+	fs.StringVarP(&d.nameRegex, "name-regex", "x", "", "Only compare resources where metadata.name matches this regex")
+	fs.StringVar(&d.skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob")
+	fs.StringVar(&d.excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to exclude")
+	fs.Var((*fileValue)(&d.ignoreConfigFile), "ignore-config", "Path to a YAML file with ignore rules")
+	fs.BoolVar(&d.noCommonIgnoreConfig, "no-common-ignore-config", false, "Disable the embedded common ignore config (compare raw resources)")
+	fs.BoolVarP(&d.dumpSecrets, "dump-secrets", "s", false, "Include secret values in comparison")
+	fs.BoolVarP(&d.skipOwned, "skip-owned", "O", false, "Skip resources with a controlling owner reference")
+	fs.BoolVarP(&d.quiet, "quiet", "q", true, "Suppress progress output")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: %s diff [flags] <local-dump-dir>\n\nDiff the current cluster state against a local dump directory.\nBoth sides are normalized before comparing (common ignore config applied by default).\n\nFlags:\n", toolNameForUsageOutput)
 		fs.PrintDefaults()
 	}
 
-	err := fs.Parse(args)
-	if err != nil {
+	if err := fs.Parse(args); err != nil {
 		return fmt.Errorf("parsing flags: %w", err)
 	}
 
@@ -613,8 +616,10 @@ func runDiff(args []string) error {
 		return fmt.Errorf("diff requires exactly one positional argument: the local dump directory")
 	}
 
-	localDumpDir := fs.Args()[0]
+	return runDiffCore(d, fs.Args()[0])
+}
 
+func runDiffCore(d diffOpts, localDumpDir string) error {
 	tempA, err := os.MkdirTemp("", "dumpall-diff-a-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
@@ -630,29 +635,29 @@ func runDiff(args []string) error {
 	defer os.RemoveAll(tempB)
 
 	labelA := "cluster"
-	if readYamlFrom != "" {
-		labelA = readYamlFrom
+	if d.readYamlFrom != "" {
+		labelA = d.readYamlFrom
 	}
 
 	buildOpts := func(outputDir, readFrom string) *options {
 		return &options{
 			outputDir:             outputDir,
 			readYamlFrom:          strings.TrimSpace(readFrom),
-			namespacesCSV:         namespacesCSV,
-			kindFilterCSV:         kindFilterCSV,
-			nameRegex:             nameRegex,
-			skipNameGlob:          skipNameGlob,
-			excludeNamespacesCSV:  excludeNamespacesCSV,
-			ignoreConfigFile:      ignoreConfigFile,
-			dumpSecrets:           dumpSecrets,
-			skipOwned:             skipOwned,
-			ignoreConfigUseCommon: !noCommonIgnoreConfig,
-			quiet:                 quiet,
+			namespacesCSV:         d.namespacesCSV,
+			kindFilterCSV:         d.kindFilterCSV,
+			nameRegex:             d.nameRegex,
+			skipNameGlob:          d.skipNameGlob,
+			excludeNamespacesCSV:  d.excludeNamespacesCSV,
+			ignoreConfigFile:      d.ignoreConfigFile,
+			dumpSecrets:           d.dumpSecrets,
+			skipOwned:             d.skipOwned,
+			ignoreConfigUseCommon: !d.noCommonIgnoreConfig,
+			quiet:                 d.quiet,
 			overwriteOutdir:       true,
 		}
 	}
 
-	optsA := buildOpts(tempA, readYamlFrom)
+	optsA := buildOpts(tempA, d.readYamlFrom)
 
 	err = finalizeOpts(optsA)
 	if err != nil {
@@ -676,54 +681,51 @@ func runDiff(args []string) error {
 		return fmt.Errorf("normalizing %s: %w", localDumpDir, err)
 	}
 
-	return compareDirs(tempA, labelA, tempB, localDumpDir, strings.TrimSpace(readYamlFrom))
+	return compareDirs(tempA, labelA, tempB, localDumpDir, strings.TrimSpace(d.readYamlFrom))
 }
 
-func runCheckNormalized(args []string) error {
-	fs := pflag.NewFlagSet("check-normalized", pflag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
+type checkNormalizedOpts struct {
+	namespacesCSV        string
+	kindFilterCSV        string
+	nameRegex            string
+	skipNameGlob         string
+	excludeNamespacesCSV string
+	ignoreConfigFile     string
+	dumpSecrets          bool
+	skipOwned            bool
+	quiet                bool
+	noCommonIgnoreConfig bool
+}
 
-	var (
-		namespacesCSV        string
-		kindFilterCSV        string
-		nameRegex            string
-		skipNameGlob         string
-		excludeNamespacesCSV string
-		ignoreConfigFile     string
-		dumpSecrets          bool
-		skipOwned            bool
-		quiet                bool
-		noCommonIgnoreConfig bool
-	)
+func buildCheckNormalizedCmd() *cobra.Command {
+	var c checkNormalizedOpts
 
-	fs.StringVarP(&namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to filter")
-	fs.StringVar(&kindFilterCSV, "kind", "", "Comma-separated list of kind globs to filter (e.g. 'ConfigMap,Secret')")
-	fs.StringVarP(&nameRegex, "name-regex", "x", "", "Only check resources where metadata.name matches this regex")
-	fs.StringVar(&skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob")
-	fs.StringVar(&excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to exclude")
-	fs.Var((*fileValue)(&ignoreConfigFile), "ignore-config", "Path to a YAML file with additional ignore rules")
-	fs.BoolVar(&noCommonIgnoreConfig, "no-common-ignore-config", false, "Disable the embedded common ignore config")
-	fs.BoolVarP(&dumpSecrets, "dump-secrets", "s", false, "Include secret values")
-	fs.BoolVarP(&skipOwned, "skip-owned", "O", false, "Skip resources with a controlling owner reference")
-	fs.BoolVarP(&quiet, "quiet", "q", true, "Suppress progress output")
-
-	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s check-normalized [flags] <yaml-file-or-dir>\n\nCheck whether a YAML file or directory is already normalized.\nExits 0 if already normalized, 1 if normalization would change it.\n\nFlags:\n", toolNameForUsageOutput)
-		fs.PrintDefaults()
+	cmd := &cobra.Command{
+		Use:          "check-normalized <yaml-file-or-dir>",
+		Short:        "Check whether a YAML file or directory is already normalized",
+		Long:         "Check whether a YAML file or directory is already normalized.\nExits 0 if already normalized, 1 if normalization would change it.",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runCheckNormalizedCore(c, args[0])
+		},
 	}
 
-	err := fs.Parse(args)
-	if err != nil {
-		return fmt.Errorf("parsing flags: %w", err)
-	}
+	cmd.Flags().StringVarP(&c.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to filter")
+	cmd.Flags().StringVar(&c.kindFilterCSV, "kind", "", "Comma-separated list of kind globs to filter (e.g. 'ConfigMap,Secret')")
+	cmd.Flags().StringVarP(&c.nameRegex, "name-regex", "x", "", "Only check resources where metadata.name matches this regex")
+	cmd.Flags().StringVar(&c.skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob")
+	cmd.Flags().StringVar(&c.excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to exclude")
+	cmd.Flags().Var((*fileValue)(&c.ignoreConfigFile), "ignore-config", "Path to a YAML file with additional ignore rules")
+	cmd.Flags().BoolVar(&c.noCommonIgnoreConfig, "no-common-ignore-config", false, "Disable the embedded common ignore config")
+	cmd.Flags().BoolVarP(&c.dumpSecrets, "dump-secrets", "s", false, "Include secret values")
+	cmd.Flags().BoolVarP(&c.skipOwned, "skip-owned", "O", false, "Skip resources with a controlling owner reference")
+	cmd.Flags().BoolVarP(&c.quiet, "quiet", "q", true, "Suppress progress output")
 
-	if len(fs.Args()) != 1 {
-		fs.Usage()
-		return fmt.Errorf("check-normalized requires exactly one positional argument")
-	}
+	return cmd
+}
 
-	inputPath := fs.Args()[0]
-
+func runCheckNormalizedCore(c checkNormalizedOpts, inputPath string) error {
 	// tempRaw: restructured without any ignore rules (the "before" side)
 	tempRaw, err := os.MkdirTemp("", "dumpall-raw-*")
 	if err != nil {
@@ -744,16 +746,16 @@ func runCheckNormalized(args []string) error {
 		return &options{
 			outputDir:             outputDir,
 			readYamlFrom:          strings.TrimSpace(inputPath),
-			namespacesCSV:         namespacesCSV,
-			kindFilterCSV:         kindFilterCSV,
-			nameRegex:             nameRegex,
-			skipNameGlob:          skipNameGlob,
-			excludeNamespacesCSV:  excludeNamespacesCSV,
+			namespacesCSV:         c.namespacesCSV,
+			kindFilterCSV:         c.kindFilterCSV,
+			nameRegex:             c.nameRegex,
+			skipNameGlob:          c.skipNameGlob,
+			excludeNamespacesCSV:  c.excludeNamespacesCSV,
 			ignoreConfigFile:      customConfig,
-			dumpSecrets:           dumpSecrets,
-			skipOwned:             skipOwned,
+			dumpSecrets:           c.dumpSecrets,
+			skipOwned:             c.skipOwned,
 			ignoreConfigUseCommon: useCommon,
-			quiet:                 quiet,
+			quiet:                 c.quiet,
 			overwriteOutdir:       true,
 		}
 	}
@@ -770,7 +772,7 @@ func runCheckNormalized(args []string) error {
 		return fmt.Errorf("reading %s: %w", inputPath, err)
 	}
 
-	optsNorm := buildOpts(tempNorm, !noCommonIgnoreConfig, ignoreConfigFile)
+	optsNorm := buildOpts(tempNorm, !c.noCommonIgnoreConfig, c.ignoreConfigFile)
 
 	err = finalizeOpts(optsNorm)
 	if err != nil {
