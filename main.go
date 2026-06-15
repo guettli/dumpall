@@ -331,6 +331,16 @@ func main() {
 		os.Exit(0)
 	}
 
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		if len(os.Args) > 2 {
+			fmt.Printf("version does not accept arguments: %v\n", os.Args[2:])
+			os.Exit(1)
+		}
+
+		fmt.Println(getBuildVersion())
+		os.Exit(0)
+	}
+
 	if len(os.Args) > 1 && os.Args[1] == "diff" {
 		err := runDiff(os.Args[2:])
 		if err != nil {
@@ -378,7 +388,7 @@ func mainWithError() error {
 	_ = pflag.CommandLine.MarkHidden("dir")
 
 	pflag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s\nRead resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n  diff <local-dump-dir>       Diff current cluster state against a local dump\n", toolNameForUsageOutput)
+		fmt.Fprintf(os.Stderr, "Usage: %s\nRead resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.\n\nSubcommands:\n  show-common-ignore-config   Print the embedded common ignore config\n  diff <local-dump-dir>       Diff current cluster state against a local dump\n  version                     Print the version\n", toolNameForUsageOutput)
 		pflag.PrintDefaults()
 	}
 
@@ -550,16 +560,17 @@ func runDiff(args []string) error {
 	fs.SetOutput(os.Stderr)
 
 	var (
-		readYamlFrom         string
-		namespacesCSV        string
-		kindFilterCSV        string
-		nameRegex            string
-		skipNameGlob         string
-		excludeNamespacesCSV string
-		ignoreConfigFile     string
-		dumpSecrets          bool
-		skipOwned            bool
-		quiet                bool
+		readYamlFrom          string
+		namespacesCSV         string
+		kindFilterCSV         string
+		nameRegex             string
+		skipNameGlob          string
+		excludeNamespacesCSV  string
+		ignoreConfigFile      string
+		dumpSecrets           bool
+		skipOwned             bool
+		quiet                 bool
+		noCommonIgnoreConfig  bool
 	)
 
 	fs.StringVar(&readYamlFrom, "read-yaml-from", "", "Read YAML from file/dir (source A) instead of connecting to cluster")
@@ -568,13 +579,14 @@ func runDiff(args []string) error {
 	fs.StringVarP(&nameRegex, "name-regex", "x", "", "Only compare resources where metadata.name matches this regex")
 	fs.StringVar(&skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob")
 	fs.StringVar(&excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to exclude")
-	fs.Var((*fileValue)(&ignoreConfigFile), "ignore-config", "Path to a YAML file with additional ignore rules (common config is always applied)")
+	fs.Var((*fileValue)(&ignoreConfigFile), "ignore-config", "Path to a YAML file with ignore rules")
+	fs.BoolVar(&noCommonIgnoreConfig, "no-common-ignore-config", false, "Disable the embedded common ignore config (compare raw resources)")
 	fs.BoolVarP(&dumpSecrets, "dump-secrets", "s", false, "Include secret values in comparison")
 	fs.BoolVarP(&skipOwned, "skip-owned", "O", false, "Skip resources with a controlling owner reference")
 	fs.BoolVarP(&quiet, "quiet", "q", true, "Suppress progress output")
 
 	fs.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: %s diff [flags] <local-dump-dir>\n\nDiff the current cluster state against a local dump directory.\nBoth sides are normalized with the common ignore config before comparing.\n\nFlags:\n", toolNameForUsageOutput)
+		fmt.Fprintf(os.Stderr, "Usage: %s diff [flags] <local-dump-dir>\n\nDiff the current cluster state against a local dump directory.\nBoth sides are normalized before comparing (common ignore config applied by default).\n\nFlags:\n", toolNameForUsageOutput)
 		fs.PrintDefaults()
 	}
 
@@ -621,7 +633,7 @@ func runDiff(args []string) error {
 			ignoreConfigFile:      ignoreConfigFile,
 			dumpSecrets:           dumpSecrets,
 			skipOwned:             skipOwned,
-			ignoreConfigUseCommon: true,
+			ignoreConfigUseCommon: !noCommonIgnoreConfig,
 			quiet:                 quiet,
 			overwriteOutdir:       true,
 		}
