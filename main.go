@@ -2671,6 +2671,17 @@ func runTopChurn(dumpA, dumpB string) error {
 		return err
 	}
 
+	relToAbsA := make(map[string]string, len(filesA))
+
+	for _, f := range filesA {
+		rel, err := filepath.Rel(dumpA, f)
+		if err != nil {
+			return fmt.Errorf("calculating relative path: %w", err)
+		}
+
+		relToAbsA[rel] = f
+	}
+
 	relToAbsB := make(map[string]string, len(filesB))
 
 	for _, f := range filesB {
@@ -2682,14 +2693,27 @@ func runTopChurn(dumpA, dumpB string) error {
 		relToAbsB[rel] = f
 	}
 
-	entries := make([]topChurnEntry, 0)
+	var (
+		entries      []topChurnEntry
+		sameGenCount int
+		anyGenFound  bool
+		onlyInACount int
+		onlyInBCount int
+	)
 
-	for _, absA := range filesA {
-		rel, err := filepath.Rel(dumpA, absA)
-		if err != nil {
-			return fmt.Errorf("calculating relative path: %w", err)
+	for rel := range relToAbsA {
+		if _, inB := relToAbsB[rel]; !inB {
+			onlyInACount++
 		}
+	}
 
+	for rel := range relToAbsB {
+		if _, inA := relToAbsA[rel]; !inA {
+			onlyInBCount++
+		}
+	}
+
+	for rel, absA := range relToAbsA {
 		absB, ok := relToAbsB[rel]
 		if !ok {
 			continue
@@ -2705,12 +2729,18 @@ func runTopChurn(dumpA, dumpB string) error {
 			return err
 		}
 
+		if genA != 0 || genB != 0 {
+			anyGenFound = true
+		}
+
 		if genA == 0 && genB == 0 {
 			continue
 		}
 
 		delta := genB - genA
 		if delta <= 0 {
+			sameGenCount++
+
 			continue
 		}
 
@@ -2730,11 +2760,15 @@ func runTopChurn(dumpA, dumpB string) error {
 	fmt.Printf("Dump A: %s  (%s)\n", dumpA, metaA.DumpedAt.Format(time.RFC3339))
 	fmt.Printf("Dump B: %s  (%s)\n", dumpB, metaB.DumpedAt.Format(time.RFC3339))
 	fmt.Printf("Cluster: %s\n", metaA.ClusterHost)
-	fmt.Printf("Time delta: %s\n\n", timeDelta.Round(time.Second))
+	fmt.Printf("Time delta: %s\n", timeDelta.Round(time.Second))
+	fmt.Printf("Only in A: %d  Only in B: %d  Unchanged generation: %d\n\n", onlyInACount, onlyInBCount, sameGenCount)
 
 	if len(entries) == 0 {
 		fmt.Println("No generation increases found.")
-		fmt.Println("Hint: ensure both dumps were created without --ignore-config-use-common (which strips metadata.generation).")
+
+		if !anyGenFound {
+			fmt.Println("Hint: ensure both dumps were created without --ignore-config-use-common (which strips metadata.generation).")
+		}
 
 		return nil
 	}
