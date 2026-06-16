@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/gavv/cobradoc"
 	"github.com/hexops/gotextdiff"
@@ -39,6 +40,7 @@ const (
 	redactionMarkerValue   = "REDCATED-BY-DUMPALL"
 	toolNameForUsageOutput = "dumpall"
 	lastAppliedAnnotation  = "kubectl.kubernetes.io/last-applied-configuration"
+	dumpMetaFileName       = "_dumpall_meta.yaml"
 
 	kindNamespace      = "Namespace"
 	kindClusterRole    = "ClusterRole"
@@ -76,11 +78,17 @@ var toSkip = map[string][]string{
 	"v1":                     {"events", "bindings", "componentstatuses", "endpoints"},
 }
 
+type dumpMeta struct {
+	DumpedAt    time.Time `yaml:"dumpedAt"`
+	ClusterHost string    `yaml:"clusterHost"`
+}
+
 type options struct {
 	outputDir             string
 	quiet                 bool
 	dumpSecrets           bool
 	dumpManagedFields     bool
+	keepGeneration        bool
 	removeOutdir          bool
 	overwriteOutdir       bool
 	skipOwned             bool
@@ -353,6 +361,7 @@ func buildRootCmd() *cobra.Command {
 	rootCmd.Flags().BoolVarP(&opts.quiet, "quiet", "q", false, "Quiet, suppress output")
 	rootCmd.Flags().BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
 	rootCmd.Flags().BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
+	rootCmd.Flags().BoolVar(&opts.keepGeneration, "keep-generation", false, "Preserve metadata.generation in dump files (required for top-churn)")
 	rootCmd.Flags().BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
 	rootCmd.Flags().BoolVarP(&opts.skipOwned, "skip-owned", "O", false, "Skip resources that have a controlling owner reference (e.g., Pods owned by a ReplicaSet) or that Kubernetes autogenerates from other resources (e.g., aggregated ClusterRoles)")
 	rootCmd.Flags().BoolVar(&opts.ignoreConfigUseCommon, "ignore-config-use-common", false, "Use the embedded common ignore config")
@@ -372,6 +381,7 @@ func buildRootCmd() *cobra.Command {
 
 	rootCmd.AddCommand(buildDiffCmd())
 	rootCmd.AddCommand(buildCheckNormalizedCmd())
+	rootCmd.AddCommand(buildTopChurnCmd())
 	rootCmd.AddCommand(buildShowCommonIgnoreConfigCmd())
 	rootCmd.AddCommand(buildVersionCmd())
 	rootCmd.AddCommand(buildGendocsCmd())
@@ -546,7 +556,12 @@ func runDump(opts *options) error {
 		return fmt.Errorf("failed to discover resources: %w", err)
 	}
 
-	return readFromAPIServer(dynClient, resourceList, opts)
+	err = readFromAPIServer(dynClient, resourceList, opts)
+	if err != nil {
+		return err
+	}
+
+	return writeDumpMeta(opts.outputDir, config.Host)
 }
 
 var errDiffsFound = errors.New("differences found")
@@ -1014,6 +1029,10 @@ func findYAMLFiles(dirPath string) ([]string, error) {
 			return nil
 		}
 
+		if filepath.Base(currentPath) == dumpMetaFileName {
+			return nil
+		}
+
 		yamlFiles = append(yamlFiles, currentPath)
 
 		return nil
@@ -1471,8 +1490,19 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 		redactSecretValues(obj)
 	}
 
+	var savedGeneration any
+	if opts.keepGeneration {
+		savedGeneration = metadata["generation"]
+	}
+
 	applyIgnoreRules(obj, opts)
 	pruneEmptyMetadataMaps(obj)
+
+	if opts.keepGeneration && savedGeneration != nil {
+		if m, ok := obj[fieldMetadata].(map[string]any); ok {
+			m["generation"] = savedGeneration
+		}
+	}
 
 	file, err := os.Create(filePath)
 	if err != nil {
@@ -2466,4 +2496,211 @@ func redactSecretAnnotations(obj map[string]any) {
 	case map[string]string:
 		delete(annotations, lastAppliedAnnotation)
 	}
+}
+
+func writeDumpMeta(outputDir, clusterHost string) error {
+	m := dumpMeta{
+		DumpedAt:    time.Now().UTC(),
+		ClusterHost: clusterHost,
+	}
+
+	data, err := yaml.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("failed to marshal dump metadata: %w", err)
+	}
+
+	filePath := filepath.Join(outputDir, dumpMetaFileName)
+
+	err = os.WriteFile(filePath, data, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to write dump metadata to %s: %w", filePath, err)
+	}
+
+	return nil
+}
+
+func readDumpMeta(dumpDir string) (dumpMeta, error) {
+	filePath := filepath.Join(dumpDir, dumpMetaFileName)
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return dumpMeta{}, fmt.Errorf("%q does not contain %s — was it created with dumpall --keep-generation?", dumpDir, dumpMetaFileName)
+		}
+
+		return dumpMeta{}, fmt.Errorf("failed to read dump metadata from %s: %w", filePath, err)
+	}
+
+	var m dumpMeta
+
+	err = yaml.Unmarshal(data, &m)
+	if err != nil {
+		return dumpMeta{}, fmt.Errorf("failed to parse dump metadata from %s: %w", filePath, err)
+	}
+
+	return m, nil
+}
+
+type topChurnEntry struct {
+	RelPath     string
+	GenA        int64
+	GenB        int64
+	Delta       int64
+	RatePerHour float64
+}
+
+func buildTopChurnCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:          "top-churn <dump-a> <dump-b>",
+		Short:        "Show resources with the highest generation increase rate between two dumps",
+		Long:         "Compare two dump directories and list resources sorted by generation increase per hour.\nBoth dumps must have been created from the same cluster with --keep-generation.",
+		SilenceUsage: true,
+		Args:         cobra.ExactArgs(2),
+		RunE: func(_ *cobra.Command, args []string) error {
+			return runTopChurn(args[0], args[1])
+		},
+	}
+}
+
+func runTopChurn(dumpA, dumpB string) error {
+	metaA, err := readDumpMeta(dumpA)
+	if err != nil {
+		return fmt.Errorf("dump A: %w", err)
+	}
+
+	metaB, err := readDumpMeta(dumpB)
+	if err != nil {
+		return fmt.Errorf("dump B: %w", err)
+	}
+
+	if metaA.ClusterHost != metaB.ClusterHost {
+		return fmt.Errorf("dumps are from different clusters: %q vs %q", metaA.ClusterHost, metaB.ClusterHost)
+	}
+
+	timeDelta := metaB.DumpedAt.Sub(metaA.DumpedAt)
+	if timeDelta <= 0 {
+		return fmt.Errorf("dump A (%s) is not earlier than dump B (%s); swap the arguments",
+			metaA.DumpedAt.Format(time.RFC3339), metaB.DumpedAt.Format(time.RFC3339))
+	}
+
+	hours := timeDelta.Hours()
+
+	filesA, err := findYAMLFiles(dumpA)
+	if err != nil {
+		return err
+	}
+
+	filesB, err := findYAMLFiles(dumpB)
+	if err != nil {
+		return err
+	}
+
+	relToAbsB := make(map[string]string, len(filesB))
+
+	for _, f := range filesB {
+		rel, err := filepath.Rel(dumpB, f)
+		if err != nil {
+			return fmt.Errorf("calculating relative path: %w", err)
+		}
+
+		relToAbsB[rel] = f
+	}
+
+	entries := make([]topChurnEntry, 0)
+
+	for _, absA := range filesA {
+		rel, err := filepath.Rel(dumpA, absA)
+		if err != nil {
+			return fmt.Errorf("calculating relative path: %w", err)
+		}
+
+		absB, ok := relToAbsB[rel]
+		if !ok {
+			continue
+		}
+
+		genA, err := readGeneration(absA)
+		if err != nil {
+			return err
+		}
+
+		genB, err := readGeneration(absB)
+		if err != nil {
+			return err
+		}
+
+		if genA == 0 && genB == 0 {
+			continue
+		}
+
+		delta := genB - genA
+		if delta <= 0 {
+			continue
+		}
+
+		entries = append(entries, topChurnEntry{
+			RelPath:     strings.TrimSuffix(rel, ".yaml"),
+			GenA:        genA,
+			GenB:        genB,
+			Delta:       delta,
+			RatePerHour: float64(delta) / hours,
+		})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].RatePerHour > entries[j].RatePerHour
+	})
+
+	fmt.Printf("Dump A: %s  (%s)\n", dumpA, metaA.DumpedAt.Format(time.RFC3339))
+	fmt.Printf("Dump B: %s  (%s)\n", dumpB, metaB.DumpedAt.Format(time.RFC3339))
+	fmt.Printf("Cluster: %s\n", metaA.ClusterHost)
+	fmt.Printf("Time delta: %s\n\n", timeDelta.Round(time.Second))
+
+	if len(entries) == 0 {
+		fmt.Println("No generation increases found.")
+		fmt.Println("Hint: ensure both dumps were created with --keep-generation.")
+
+		return nil
+	}
+
+	maxLen := len("RESOURCE")
+
+	for _, e := range entries {
+		if len(e.RelPath) > maxLen {
+			maxLen = len(e.RelPath)
+		}
+	}
+
+	fmt.Printf("%-*s  %8s  %8s  %8s  %10s\n", maxLen, "RESOURCE", "GEN_A", "GEN_B", "DELTA", "RATE/h")
+
+	for _, e := range entries {
+		fmt.Printf("%-*s  %8d  %8d  %8d  %10.2f\n", maxLen, e.RelPath, e.GenA, e.GenB, e.Delta, e.RatePerHour)
+	}
+
+	return nil
+}
+
+func readGeneration(filePath string) (int64, error) {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("failed to read %s: %w", filePath, err)
+	}
+
+	nodes, err := kio.FromBytes(data)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse YAML in %s: %w", filePath, err)
+	}
+
+	if len(nodes) == 0 {
+		return 0, nil
+	}
+
+	m, err := nodes[0].Map()
+	if err != nil {
+		return 0, fmt.Errorf("failed to convert %s to map: %w", filePath, err)
+	}
+
+	gen, _, _ := unstructured.NestedInt64(m, fieldMetadata, "generation")
+
+	return gen, nil
 }
