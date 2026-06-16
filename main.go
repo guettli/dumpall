@@ -2541,12 +2541,13 @@ func buildTopChurnCmd() *cobra.Command {
 		dumpWaitDump  string
 		namespacesCSV string
 		kindFilterCSV string
+		removeDumps   bool
 	)
 
 	cmd := &cobra.Command{
 		Use:          "top-churn [<dump-a> <dump-b>]",
 		Short:        "Show resources with the highest generation increase rate between two dumps",
-		Long:         "Compare two dump directories and list resources sorted by generation increase per hour.\nBoth dumps must have been created from the same cluster.\n\nWith --dump-wait-dump the command takes both dumps itself, waits between them, then compares.\nUse --namespaces and --kind to limit the scope of the automatic dumps (both accept comma-separated values).",
+		Long:         "Compare two dump directories and list resources sorted by generation increase per hour.\nBoth dumps must have been created from the same cluster.\n\nWith --dump-wait-dump the command takes both dumps itself, waits between them, then compares.\nThe dump directories are kept on disk unless --remove is given.\nUse --namespaces and --kind to limit the scope of the automatic dumps (both accept comma-separated values).",
 		SilenceUsage: true,
 		Args:         cobra.RangeArgs(0, 2),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -2560,7 +2561,7 @@ func buildTopChurnCmd() *cobra.Command {
 					return fmt.Errorf("invalid duration %q: %w", dumpWaitDump, err)
 				}
 
-				return runTopChurnWithDumps(wait, namespacesCSV, kindFilterCSV)
+				return runTopChurnWithDumps(wait, namespacesCSV, kindFilterCSV, removeDumps)
 			}
 
 			if len(args) != 2 {
@@ -2573,26 +2574,28 @@ func buildTopChurnCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&dumpWaitDump, "dump-wait-dump", "", "Take two dumps with a wait between them, then compare (default wait: 7m)")
 	cmd.Flag("dump-wait-dump").NoOptDefVal = "7m"
+	cmd.Flags().BoolVar(&removeDumps, "remove", false, "Remove the dump directories after comparison (for --dump-wait-dump)")
 	cmd.Flags().StringVarP(&namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to dump (for --dump-wait-dump)")
 	cmd.Flags().StringVar(&kindFilterCSV, "kind", "", "Comma-separated list of kind globs to dump (for --dump-wait-dump, e.g. 'Deployment,StatefulSet')")
 
 	return cmd
 }
 
-func runTopChurnWithDumps(wait time.Duration, namespacesCSV, kindFilterCSV string) error {
+func runTopChurnWithDumps(wait time.Duration, namespacesCSV, kindFilterCSV string, removeDumps bool) error {
 	dirA, err := os.MkdirTemp("", "dumpall-churn-a-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
-
-	defer os.RemoveAll(dirA)
 
 	dirB, err := os.MkdirTemp("", "dumpall-churn-b-*")
 	if err != nil {
 		return fmt.Errorf("failed to create temp dir: %w", err)
 	}
 
-	defer os.RemoveAll(dirB)
+	if removeDumps {
+		defer os.RemoveAll(dirA)
+		defer os.RemoveAll(dirB)
+	}
 
 	buildDumpOpts := func(outputDir string) *options {
 		return &options{
@@ -2611,7 +2614,7 @@ func runTopChurnWithDumps(wait time.Duration, namespacesCSV, kindFilterCSV strin
 		return fmt.Errorf("configuring first dump: %w", err)
 	}
 
-	fmt.Println("Taking first dump...")
+	fmt.Printf("Taking first dump into %s...\n", dirA)
 
 	err = runDump(optsA)
 	if err != nil {
@@ -2628,7 +2631,7 @@ func runTopChurnWithDumps(wait time.Duration, namespacesCSV, kindFilterCSV strin
 		return fmt.Errorf("configuring second dump: %w", err)
 	}
 
-	fmt.Println("Taking second dump...")
+	fmt.Printf("Taking second dump into %s...\n", dirB)
 
 	err = runDump(optsB)
 	if err != nil {
