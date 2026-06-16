@@ -22,3 +22,12 @@ repos:
   rev: v8.24.0
   hooks:
     - id: gitleaks
+
+- repo: local
+  hooks:
+  - id: update-readme-usage
+    name: Update README usage block
+    language: script
+    entry: scripts/update-readme.sh
+    pass_filenames: false
+    always_run: true

@@ -123,7 +123,48 @@ Written: out/_cluster/v1.Namespace/cert-manager.yaml    <-- non-namespaces resou
 
 ## Usage
 
-[Usage](https://github.com/guettli/dumpall/blob/main/usage.md)
+<!-- usage:start -->
+```text
+Read resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.
+
+Usage:
+  dumpall [flags]
+  dumpall [command]
+
+Available Commands:
+  check-normalized          Check whether a YAML file or directory is already normalized
+  completion                Generate the autocompletion script for the specified shell
+  diff                      Diff the current cluster state against a local dump
+  gendocs                   Generate usage.md from the command tree
+  help                      Help about any command
+  show-common-ignore-config Print the embedded common ignore config
+  top-churn                 Show resources with the highest generation increase rate between two dumps
+  version                   Print the version
+
+Flags:
+      --comment string                  Additional comment line to add at the top of each output YAML file
+  -m, --dump-managed-fields             Dump managed fields (disabled by default)
+  -s, --dump-secrets                    Dump secrets (disabled by default)
+      --exclude-namespaces string       Comma-separated list of namespace globs to fully exclude (e.g. 'foo-*,test-*'). Drops the Namespace object plus all resources inside; uses fieldSelector to skip those namespaces api-server-side
+  -h, --help                            help for dumpall
+      --ignore-config file              Path to a YAML file with ignore rules
+      --ignore-config-use-common        Use the embedded common ignore config
+      --kind string                     Comma-separated list of kind globs to dump (e.g. 'ConfigMap,Secret,Cluster*')
+  -x, --name-regex string               Only dump resources where metadata.name matches this regex
+  -n, --namespaces string               Comma-separated list of namespaces to dump
+  -o, --out-dir dir                     Output directory (must not exist) (default out)
+  -q, --quiet                           Quiet, suppress output
+      --read-resource-names-from path   Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources from the api-server.
+      --read-yaml-from path             Read YAML manifests from a file or directory instead of connecting to the api-server. Useful for normalizing existing YAML files for better diffing.
+  -r, --remove-out-dir                  Remove out-dir before dumping (disabled by default)
+      --skip-name-glob string           Skip resources where metadata.name matches this glob (e.g. 'foo-*' skips names starting with 'foo-')
+  -O, --skip-owned                      Skip resources that have a controlling owner reference (e.g., Pods owned by a ReplicaSet) or that Kubernetes autogenerates from other resources (e.g., aggregated ClusterRoles)
+
+Use "dumpall [command] --help" for more information about a command.
+```
+<!-- usage:end -->
+
+For details on all subcommands and flags see [usage.md](usage.md).
 
 ## See Changes
 
