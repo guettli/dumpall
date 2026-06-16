@@ -88,7 +88,6 @@ type options struct {
 	quiet                 bool
 	dumpSecrets           bool
 	dumpManagedFields     bool
-	keepGeneration        bool
 	removeOutdir          bool
 	overwriteOutdir       bool
 	skipOwned             bool
@@ -361,7 +360,6 @@ func buildRootCmd() *cobra.Command {
 	rootCmd.Flags().BoolVarP(&opts.quiet, "quiet", "q", false, "Quiet, suppress output")
 	rootCmd.Flags().BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
 	rootCmd.Flags().BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
-	rootCmd.Flags().BoolVar(&opts.keepGeneration, "keep-generation", false, "Preserve metadata.generation in dump files (required for top-churn)")
 	rootCmd.Flags().BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
 	rootCmd.Flags().BoolVarP(&opts.skipOwned, "skip-owned", "O", false, "Skip resources that have a controlling owner reference (e.g., Pods owned by a ReplicaSet) or that Kubernetes autogenerates from other resources (e.g., aggregated ClusterRoles)")
 	rootCmd.Flags().BoolVar(&opts.ignoreConfigUseCommon, "ignore-config-use-common", false, "Use the embedded common ignore config")
@@ -1490,19 +1488,8 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 		redactSecretValues(obj)
 	}
 
-	var savedGeneration any
-	if opts.keepGeneration {
-		savedGeneration = metadata["generation"]
-	}
-
 	applyIgnoreRules(obj, opts)
 	pruneEmptyMetadataMaps(obj)
-
-	if opts.keepGeneration && savedGeneration != nil {
-		if m, ok := obj[fieldMetadata].(map[string]any); ok {
-			m["generation"] = savedGeneration
-		}
-	}
 
 	file, err := os.Create(filePath)
 	if err != nil {
@@ -2525,7 +2512,7 @@ func readDumpMeta(dumpDir string) (dumpMeta, error) {
 	data, err := os.ReadFile(filePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return dumpMeta{}, fmt.Errorf("%q does not contain %s — was it created with dumpall --keep-generation?", dumpDir, dumpMetaFileName)
+			return dumpMeta{}, fmt.Errorf("%q does not contain %s — was it created with a recent version of dumpall?", dumpDir, dumpMetaFileName)
 		}
 
 		return dumpMeta{}, fmt.Errorf("failed to read dump metadata from %s: %w", filePath, err)
@@ -2553,7 +2540,7 @@ func buildTopChurnCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:          "top-churn <dump-a> <dump-b>",
 		Short:        "Show resources with the highest generation increase rate between two dumps",
-		Long:         "Compare two dump directories and list resources sorted by generation increase per hour.\nBoth dumps must have been created from the same cluster with --keep-generation.",
+		Long:         "Compare two dump directories and list resources sorted by generation increase per hour.\nBoth dumps must have been created from the same cluster.",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -2658,7 +2645,7 @@ func runTopChurn(dumpA, dumpB string) error {
 
 	if len(entries) == 0 {
 		fmt.Println("No generation increases found.")
-		fmt.Println("Hint: ensure both dumps were created with --keep-generation.")
+		fmt.Println("Hint: ensure both dumps were created without --ignore-config-use-common (which strips metadata.generation).")
 
 		return nil
 	}
