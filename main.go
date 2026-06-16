@@ -2546,7 +2546,7 @@ func buildTopChurnCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "top-churn [<dump-a> <dump-b>]",
 		Short:        "Show resources with the highest generation increase rate between two dumps",
-		Long:         "Compare two dump directories and list resources sorted by generation increase per hour.\nBoth dumps must have been created from the same cluster.\n\nWith --dump-wait-dump the command takes both dumps itself, waits between them, then compares.",
+		Long:         "Compare two dump directories and list resources sorted by generation increase per hour.\nBoth dumps must have been created from the same cluster.\n\nWith --dump-wait-dump the command takes both dumps itself, waits between them, then compares.\nUse --namespaces and --kind to limit the scope of the automatic dumps (both accept comma-separated values).",
 		SilenceUsage: true,
 		Args:         cobra.RangeArgs(0, 2),
 		RunE: func(_ *cobra.Command, args []string) error {
@@ -2573,8 +2573,8 @@ func buildTopChurnCmd() *cobra.Command {
 
 	cmd.Flags().StringVar(&dumpWaitDump, "dump-wait-dump", "", "Take two dumps with a wait between them, then compare (default wait: 7m)")
 	cmd.Flag("dump-wait-dump").NoOptDefVal = "7m"
-	cmd.Flags().StringVarP(&namespacesCSV, "namespaces", "n", "", "Namespaces to dump (for --dump-wait-dump)")
-	cmd.Flags().StringVar(&kindFilterCSV, "kind", "", "Kind globs to dump (for --dump-wait-dump)")
+	cmd.Flags().StringVarP(&namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to dump (for --dump-wait-dump)")
+	cmd.Flags().StringVar(&kindFilterCSV, "kind", "", "Comma-separated list of kind globs to dump (for --dump-wait-dump, e.g. 'Deployment,StatefulSet')")
 
 	return cmd
 }
