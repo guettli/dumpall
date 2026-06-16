@@ -2537,16 +2537,105 @@ type topChurnEntry struct {
 }
 
 func buildTopChurnCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:          "top-churn <dump-a> <dump-b>",
+	var (
+		dumpWaitDump  string
+		namespacesCSV string
+		kindFilterCSV string
+	)
+
+	cmd := &cobra.Command{
+		Use:          "top-churn [<dump-a> <dump-b>]",
 		Short:        "Show resources with the highest generation increase rate between two dumps",
-		Long:         "Compare two dump directories and list resources sorted by generation increase per hour.\nBoth dumps must have been created from the same cluster.",
+		Long:         "Compare two dump directories and list resources sorted by generation increase per hour.\nBoth dumps must have been created from the same cluster.\n\nWith --dump-wait-dump the command takes both dumps itself, waits between them, then compares.",
 		SilenceUsage: true,
-		Args:         cobra.ExactArgs(2),
+		Args:         cobra.RangeArgs(0, 2),
 		RunE: func(_ *cobra.Command, args []string) error {
+			if dumpWaitDump != "" {
+				if len(args) != 0 {
+					return fmt.Errorf("--dump-wait-dump takes no positional arguments")
+				}
+
+				wait, err := time.ParseDuration(dumpWaitDump)
+				if err != nil {
+					return fmt.Errorf("invalid duration %q: %w", dumpWaitDump, err)
+				}
+
+				return runTopChurnWithDumps(wait, namespacesCSV, kindFilterCSV)
+			}
+
+			if len(args) != 2 {
+				return fmt.Errorf("provide two dump directories or use --dump-wait-dump")
+			}
+
 			return runTopChurn(args[0], args[1])
 		},
 	}
+
+	cmd.Flags().StringVar(&dumpWaitDump, "dump-wait-dump", "", "Take two dumps with a wait between them, then compare (default wait: 7m)")
+	cmd.Flag("dump-wait-dump").NoOptDefVal = "7m"
+	cmd.Flags().StringVarP(&namespacesCSV, "namespaces", "n", "", "Namespaces to dump (for --dump-wait-dump)")
+	cmd.Flags().StringVar(&kindFilterCSV, "kind", "", "Kind globs to dump (for --dump-wait-dump)")
+
+	return cmd
+}
+
+func runTopChurnWithDumps(wait time.Duration, namespacesCSV, kindFilterCSV string) error {
+	dirA, err := os.MkdirTemp("", "dumpall-churn-a-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+
+	defer os.RemoveAll(dirA)
+
+	dirB, err := os.MkdirTemp("", "dumpall-churn-b-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+
+	defer os.RemoveAll(dirB)
+
+	buildDumpOpts := func(outputDir string) *options {
+		return &options{
+			outputDir:       outputDir,
+			namespacesCSV:   namespacesCSV,
+			kindFilterCSV:   kindFilterCSV,
+			quiet:           true,
+			overwriteOutdir: true,
+		}
+	}
+
+	optsA := buildDumpOpts(dirA)
+
+	err = finalizeOpts(optsA)
+	if err != nil {
+		return fmt.Errorf("configuring first dump: %w", err)
+	}
+
+	fmt.Println("Taking first dump...")
+
+	err = runDump(optsA)
+	if err != nil {
+		return fmt.Errorf("first dump failed: %w", err)
+	}
+
+	fmt.Printf("Waiting %s...\n", wait)
+	time.Sleep(wait)
+
+	optsB := buildDumpOpts(dirB)
+
+	err = finalizeOpts(optsB)
+	if err != nil {
+		return fmt.Errorf("configuring second dump: %w", err)
+	}
+
+	fmt.Println("Taking second dump...")
+
+	err = runDump(optsB)
+	if err != nil {
+		return fmt.Errorf("second dump failed: %w", err)
+	}
+
+	return runTopChurn(dirA, dirB)
 }
 
 func runTopChurn(dumpA, dumpB string) error {
