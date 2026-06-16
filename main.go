@@ -2796,21 +2796,16 @@ func readGeneration(filePath string) (int64, error) {
 		return 0, fmt.Errorf("failed to read %s: %w", filePath, err)
 	}
 
-	nodes, err := kio.FromBytes(data)
+	var obj struct {
+		Metadata struct {
+			Generation int64 `yaml:"generation"`
+		} `yaml:"metadata"`
+	}
+
+	err = yaml.Unmarshal(data, &obj)
 	if err != nil {
 		return 0, fmt.Errorf("failed to parse YAML in %s: %w", filePath, err)
 	}
 
-	if len(nodes) == 0 {
-		return 0, nil
-	}
-
-	m, err := nodes[0].Map()
-	if err != nil {
-		return 0, fmt.Errorf("failed to convert %s to map: %w", filePath, err)
-	}
-
-	gen, _, _ := unstructured.NestedInt64(m, fieldMetadata, "generation")
-
-	return gen, nil
+	return obj.Metadata.Generation, nil
 }
