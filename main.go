@@ -1225,6 +1225,10 @@ func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourc
 				continue
 			}
 
+			if !opts.dumpSecrets && resource.Kind == "Secret" {
+				continue
+			}
+
 			if len(opts.kindFilter) > 0 && !matchesAnyGlob(opts.kindFilter, resource.Kind) {
 				continue
 			}
