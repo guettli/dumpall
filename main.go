@@ -1257,7 +1257,7 @@ func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourc
 				err := enqueueGVRItems(client, job, opts, writeJobs)
 				if err != nil {
 					events <- processingEvent{
-						logMessage: fmt.Sprintf("Failed to process resource %q %s: %v", job.groupVersion, job.resourceName, err),
+						logMessage: fmt.Sprintf("INFO: skipping resource type %q: Failed to process resource %q %s: %v", job.resourceName, job.groupVersion, job.resourceName, err),
 					}
 				}
 			}
