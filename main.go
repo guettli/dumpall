@@ -1225,7 +1225,7 @@ func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourc
 				continue
 			}
 
-			if !opts.dumpSecrets && resource.Kind == "Secret" {
+			if !opts.dumpSecrets && resource.Kind == kindSecret {
 				continue
 			}
 
