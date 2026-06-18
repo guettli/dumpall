@@ -459,6 +459,57 @@ removeFields:
 	}
 }
 
+func TestReadYamlFromDir_SkipsDocumentsWithoutMetadata(t *testing.T) {
+	t.Parallel()
+
+	inputDir := t.TempDir()
+
+	err := os.WriteFile(filepath.Join(inputDir, "kustomization.yaml"), []byte(`
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - deployment.yaml
+`), 0o600)
+	if err != nil {
+		t.Fatalf("write kustomization file: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(inputDir, "configmap.yaml"), []byte(`
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cfg
+  namespace: default
+data:
+  key: value
+`), 0o600)
+	if err != nil {
+		t.Fatalf("write configmap file: %v", err)
+	}
+
+	outputDir := filepath.Join(t.TempDir(), "out")
+	opts := &options{
+		outputDir: outputDir,
+		quiet:     true,
+	}
+
+	err = readYamlFromDir(inputDir, opts)
+	if err != nil {
+		t.Fatalf("readYamlFromDir returned error: %v", err)
+	}
+
+	_, err = os.Stat(filepath.Join(outputDir, "default", "ConfigMap", "cfg.yaml"))
+	if err != nil {
+		t.Fatalf("expected configmap output file: %v", err)
+	}
+
+	kustomizeOut := filepath.Join(outputDir, clusterNamespace, "Kustomization")
+	_, err = os.Stat(kustomizeOut)
+	if err == nil {
+		t.Fatalf("expected kustomization to be skipped, but found output at %s", kustomizeOut)
+	}
+}
+
 func TestShouldProcessItem(t *testing.T) {
 	t.Parallel()
 

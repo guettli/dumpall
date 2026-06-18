@@ -1117,6 +1117,10 @@ func enqueueYAMLBytesAsJobs(bytes []byte, sourceName string, opts *options, jobs
 			return fmt.Errorf("failed to convert document %d in %s to map: %w", i+1, sourceName, err)
 		}
 
+		if _, hasMetadata := m[fieldMetadata]; !hasMetadata {
+			continue
+		}
+
 		u := &unstructured.Unstructured{Object: m}
 
 		ns, _, err := unstructured.NestedString(m, fieldMetadata, "namespace")
