@@ -504,6 +504,7 @@ data:
 	}
 
 	kustomizeOut := filepath.Join(outputDir, clusterNamespace, "Kustomization")
+
 	_, err = os.Stat(kustomizeOut)
 	if err == nil {
 		t.Fatalf("expected kustomization to be skipped, but found output at %s", kustomizeOut)
