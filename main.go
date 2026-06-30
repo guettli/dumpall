@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	_ "embed"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -87,6 +88,7 @@ type options struct {
 	outputDir             string
 	quiet                 bool
 	dumpSecrets           bool
+	secretsAsStringData   bool
 	dumpManagedFields     bool
 	removeOutdir          bool
 	overwriteOutdir       bool
@@ -359,6 +361,7 @@ func buildRootCmd() *cobra.Command {
 	rootCmd.Flags().VarP((*dirValue)(&opts.outputDir), "out-dir", "o", "Output directory (must not exist)")
 	rootCmd.Flags().BoolVarP(&opts.quiet, "quiet", "q", false, "Quiet, suppress output")
 	rootCmd.Flags().BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
+	rootCmd.Flags().BoolVar(&opts.secretsAsStringData, "secrets-as-stringdata", false, "Write secret values as stringData (decoded from base64); requires --dump-secrets (-s)")
 	rootCmd.Flags().BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
 	rootCmd.Flags().BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
 	rootCmd.Flags().BoolVarP(&opts.skipOwned, "skip-owned", "O", false, "Skip resources that have a controlling owner reference (e.g., Pods owned by a ReplicaSet) or that Kubernetes autogenerates from other resources (e.g., aggregated ClusterRoles)")
@@ -441,6 +444,10 @@ func buildGendocsCmd() *cobra.Command {
 }
 
 func finalizeOpts(opts *options) error {
+	if opts.secretsAsStringData && !opts.dumpSecrets {
+		return fmt.Errorf("--secrets-as-stringdata requires --dump-secrets (-s)")
+	}
+
 	namespaceFilter, err := parseNamespaceFilter(opts.namespacesCSV)
 	if err != nil {
 		return err
@@ -1496,6 +1503,10 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 		redactSecretValues(obj)
 	}
 
+	if opts.secretsAsStringData {
+		convertSecretDataToStringData(obj)
+	}
+
 	applyIgnoreRules(obj, opts)
 	pruneEmptyMetadataMaps(obj)
 
@@ -2434,6 +2445,43 @@ var sanitizePathRegex = regexp.MustCompile(`[\\/:*?"'<>|!@#$%^&()+={}\[\];,]`)
 
 func sanitizePath(path string) string {
 	return sanitizePathRegex.ReplaceAllString(path, "_")
+}
+
+func convertSecretDataToStringData(obj map[string]any) {
+	if !isCoreV1Secret(obj) {
+		return
+	}
+
+	data, ok := obj["data"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	stringData := make(map[string]any, len(data))
+
+	for key, val := range data {
+		encoded, ok := val.(string)
+		if !ok {
+			stringData[key] = val
+
+			continue
+		}
+
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			stringData[key] = val
+
+			continue
+		}
+
+		stringData[key] = string(decoded)
+	}
+
+	delete(obj, "data")
+
+	if len(stringData) > 0 {
+		obj["stringData"] = stringData
+	}
 }
 
 func redactSecretValues(obj map[string]any) {

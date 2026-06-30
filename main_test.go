@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"io"
 	"os"
@@ -101,6 +102,78 @@ func TestWriteYAML_DumpSecretsKeepsSecretValues(t *testing.T) {
 
 	if strings.Contains(content, redactionMarkerValue) {
 		t.Fatalf("expected output to not contain redaction marker %q, got:\n%s", redactionMarkerValue, content)
+	}
+}
+
+func TestWriteYAML_SecretsAsStringData(t *testing.T) {
+	t.Parallel()
+
+	plainValue := "my-plain-password"
+	encodedValue := base64.StdEncoding.EncodeToString([]byte(plainValue))
+
+	obj := map[string]any{
+		testAPIVersion: "v1",
+		testKindField:  "Secret",
+		fieldMetadata: map[string]any{
+			testNameField: "my-secret",
+			"namespace":   "default",
+		},
+		"data": map[string]any{
+			"password": encodedValue,
+		},
+	}
+
+	outFile := filepath.Join(t.TempDir(), "secret.yaml")
+	opts := &options{
+		quiet:               true,
+		dumpSecrets:         true,
+		secretsAsStringData: true,
+	}
+
+	err := writeYAML(outFile, obj, opts)
+	if err != nil {
+		t.Fatalf("writeYAML returned error: %v", err)
+	}
+
+	contentBytes, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read output file: %v", err)
+	}
+
+	content := string(contentBytes)
+
+	if !strings.Contains(content, "stringData:") {
+		t.Fatalf("expected output to contain stringData, got:\n%s", content)
+	}
+
+	if !strings.Contains(content, "password: "+plainValue) {
+		t.Fatalf("expected output to contain decoded password %q, got:\n%s", plainValue, content)
+	}
+
+	if strings.Contains(content, "\ndata:\n") {
+		t.Fatalf("expected output to not contain top-level 'data:' field, got:\n%s", content)
+	}
+
+	if strings.Contains(content, encodedValue) {
+		t.Fatalf("expected output to not contain base64-encoded value %q, got:\n%s", encodedValue, content)
+	}
+}
+
+func TestFinalizeOpts_SecretsAsStringDataRequiresDumpSecrets(t *testing.T) {
+	t.Parallel()
+
+	opts := &options{
+		secretsAsStringData: true,
+		dumpSecrets:         false,
+	}
+
+	err := finalizeOpts(opts)
+	if err == nil {
+		t.Fatal("expected error when --secrets-as-stringdata is set without --dump-secrets")
+	}
+
+	if !strings.Contains(err.Error(), "--dump-secrets") {
+		t.Fatalf("expected error to mention --dump-secrets, got: %v", err)
 	}
 }
 
