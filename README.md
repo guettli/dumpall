@@ -219,6 +219,7 @@ are different. Especially, if you modify `ignoreDifference` of ArgoCD.
 ## Related
 
 - [check-conditions](https://github.com/guettli/check-conditions) Tiny tool to check all conditions of all resources in your Kubernetes cluster.
+- [korphan](https://github.com/guettli/korphan) Find orphaned Kubernetes resources — those managed by neither a controller nor a GitOps tool.
 - [Thomas WOL: Working out Loud](https://github.com/guettli/wol) Articles, projects, and insights spanning various topics in software development.
 
 ## Feedback is welcome
