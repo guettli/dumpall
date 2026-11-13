@@ -50,7 +50,7 @@ require (
 
 require (
 	github.com/gavv/cobradoc v1.3.2
-	github.com/guettli/kubenorm v0.0.0
+	github.com/guettli/kubenorm v0.0.1
 	github.com/hexops/gotextdiff v1.0.3
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
@@ -58,6 +58,3 @@ require (
 	k8s.io/client-go v0.37.2
 	sigs.k8s.io/yaml v1.6.0
 )
-
-// TODO: remove before pushing, once github.com/guettli/kubenorm is released.
-replace github.com/guettli/kubenorm => ../kubenorm
