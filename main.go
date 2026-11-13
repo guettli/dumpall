@@ -29,7 +29,6 @@ import (
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/tools/clientcmd"
-	"sigs.k8s.io/kustomize/kyaml/kio"
 	yaml "sigs.k8s.io/yaml/goyaml.v3"
 )
 
@@ -923,18 +922,13 @@ func loadResourceNameFilter(fromPath string) (map[resourceNameKey]struct{}, erro
 			return nil, fmt.Errorf("failed to read file %s: %w", filePath, err)
 		}
 
-		nodes, err := kio.FromBytes(data)
+		resources, err := normalize.ParseYAML(data, filePath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse YAML in %s: %w", filePath, err)
+			return nil, fmt.Errorf("parsing YAML: %w", err)
 		}
 
-		for _, node := range nodes {
-			m, err := node.Map()
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert document in %s to map: %w", filePath, err)
-			}
-
-			u := &unstructured.Unstructured{Object: m}
+		for _, r := range resources {
+			u := r.Unstructured()
 
 			ns := u.GetNamespace()
 			if ns == "" {
@@ -958,31 +952,15 @@ func isYAMLFile(filePath string) bool {
 }
 
 func enqueueYAMLBytesAsJobs(bytes []byte, sourceName string, opts *options, jobs chan<- resourceWriteJob) error {
-	nodes, err := kio.FromBytes(bytes)
+	// Parse like kubectl (YAML 1.1, Lists expanded), shared with kubenorm.
+	resources, err := normalize.ParseYAML(bytes, sourceName)
 	if err != nil {
-		return fmt.Errorf("failed to parse YAML in %s: %w", sourceName, err)
+		return fmt.Errorf("parsing YAML: %w", err)
 	}
 
-	for i := range nodes {
-		node := nodes[i]
-
-		m, err := node.Map()
-		if err != nil {
-			return fmt.Errorf("failed to convert document %d in %s to map: %w", i+1, sourceName, err)
-		}
-
-		if _, hasMetadata := m[fieldMetadata]; !hasMetadata {
-			continue
-		}
-
-		u := &unstructured.Unstructured{Object: m}
-
-		ns, _, err := unstructured.NestedString(m, fieldMetadata, "namespace")
-		if err != nil {
-			return fmt.Errorf("failed to get namespace for item %s in %s: %w", u.GetName(), sourceName, err)
-		}
-
-		isNamespaced := ns != ""
+	for _, r := range resources {
+		u := r.Unstructured()
+		isNamespaced := r.Namespaced()
 
 		if !shouldProcessItem(u, isNamespaced, opts) {
 			continue
