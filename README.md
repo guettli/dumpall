@@ -1,16 +1,27 @@
 # Dump all Kubernetes resources into a directory structure
 
-Dumps all Kubernetes resources into a directory structure:
+Dumps all Kubernetes resources of a cluster into a directory structure:
 
 ```text
-out/NAMESPACE/GVK/NAME.yaml
+out/NAMESPACE/[GROUP_]KIND/NAME.yaml
 ```
 
 For example:
 
 ```text
-out/kube-system/v1.ConfigMap/kubelet-config.yaml
+out/kube-system/ConfigMap/kubelet-config.yaml
+out/kube-system/apps_Deployment/coredns.yaml
+out/_cluster/Namespace/kube-system.yaml     (cluster-scoped resources)
 ```
+
+The YAML is written like `kubectl get -o yaml` does.
+
+dumpall talks to the api-server. The normalization (ignore rules, common
+config, output layout) lives in [kubenorm](https://github.com/guettli/kubenorm),
+which dumpall uses as a library. **If you only work with YAML files on disk**
+(helm output, Rendered Manifests Pattern, CI checks), use kubenorm directly: it
+reads stdin, has `kubenorm norm --check`, `kubenorm diff` and `kubenorm explain`,
+and does not pull in client-go.
 
 The resources of kind Secret are not dumped by default. If needed, use `--dump-secrets`.
 
@@ -18,7 +29,7 @@ To dump only specific namespaces, use `--namespaces` (or `-n`) with a comma-sepa
 
 To dump only resources whose `metadata.name` matches a regex, use `--name-regex` (or `-x`), for example `--name-regex '^kube-apiserver-.*'`.
 
-To skip resources whose `metadata.name` matches a glob, use `--skip-name-glob`, for example `--skip-name-glob 'foo-*'` skips every resource whose name starts with `foo-`. The glob is anchored, so `foo-*` matches `foo-bar` but not `myfoo-bar`. For more selective skipping (by kind, group, or namespace too), use the `skip:` section in the ignore config (see below).
+To skip resources whose `metadata.name` matches a glob, use `--skip-name-glob`, for example `--skip-name-glob 'foo-*'` skips every resource whose name starts with `foo-`. The glob is anchored, so `foo-*` matches `foo-bar` but not `myfoo-bar`. For more selective skipping (by kind, group, or namespace too), use `skipResources` in the ignore config (see below).
 
 To skip resources that are managed by a controller (i.e. resources with an entry in
 `metadata.ownerReferences` where `controller: true`), use `--skip-owned` (or `-O`). For example,
@@ -32,17 +43,14 @@ skipped. Resources with non-controlling owner references are still dumped.
 - The `default` ServiceAccount that the service-account controller creates in every namespace.
 - The `kube-root-ca.crt` ConfigMap that the root-ca-cert-publisher creates in every namespace.
 
-To read existing YAML manifests instead of connecting to the api-server, use `--read-yaml-from` with a file or directory path. Directory input is recursive. This is useful for normalizing YAML files for better diffing — for example, stripping server-managed fields before committing manifests to git (see the [Rendered Manifests Pattern](https://akuity.io/blog/the-rendered-manifests-pattern)).
+`--read-yaml-from` reads a YAML file or directory instead of connecting to the
+api-server, and `dumpall check-normalized` checks files. Both still work, but
+for files on disk kubenorm is the better tool:
 
 ```terminal
-# Normalize all manifests in a directory tree (strip noisy fields, then re-write)
-dumpall --read-yaml-from ./manifests --ignore-config-use-common --out-dir ./normalized
+# instead of: dumpall --read-yaml-from ./manifests --ignore-config-use-common -o ./normalized
+kubenorm norm ./manifests -o ./normalized
 ```
-
-The normalization (ignore rules, common config, output layout) is implemented in
-[kubenorm](https://github.com/guettli/kubenorm), which dumpall uses as a library. If you only work
-with files on disk (helm output, Rendered Manifests Pattern, CI checks), use kubenorm directly: it
-reads stdin, has `kubenorm norm --check` and `kubenorm diff`, and does not pull in client-go.
 
 To dump only a specific subset of resources from the api-server, use `--read-resource-names-from` with a file or directory of YAML manifests. dumpall reads the `kind`, `namespace`, and `name` of each resource in those files and dumps only the matching resources from the cluster. This pairs well with the [Rendered Manifests Pattern](https://akuity.io/blog/the-rendered-manifests-pattern):
 
@@ -51,60 +59,19 @@ To dump only a specific subset of resources from the api-server, use `--read-res
 dumpall --read-resource-names-from ./rendered-manifests --out-dir ./cluster-state
 ```
 
-Ignore rules are optional and off by default. There are three modes:
+Ignore rules are optional and off by default:
 
-1. No ignore flag: output behaves like before, with no ignore rules applied.
-2. `--ignore-config-use-common`: use the embedded common ignore config to reduce diff noise from server-managed fields.
+1. No ignore flag: no ignore rules are applied.
+2. `--ignore-config-use-common`: use the common config of kubenorm to reduce diff noise from server-managed fields and defaults.
 3. `--ignore-config rules.yaml`: use only the rules from your YAML file.
-4. `--ignore-config-use-common --ignore-config rules.yaml`: use the union of embedded common rules and your YAML rules.
+4. `--ignore-config-use-common --ignore-config rules.yaml`: use both.
 
-Use `dumpall show-common-ignore-config` to print the embedded YAML config exactly as stored in the binary, including comments.
+`dumpall show-common-ignore-config` prints the common config. The config format
+(`removeFields`, `skipResources`, `excludeNamespaces`, `quantityFields`, ...)
+is documented in the [kubenorm README](https://github.com/guettli/kubenorm#config).
+Use `kubenorm explain` to see which rule changes or drops what.
 
-The YAML schema is parsed in strict mode, so unknown fields fail fast.
-
-Example:
-
-```yaml
-removeFields:
-  - group: apps
-    kind: Deployment
-    namespace: prod-*
-    name: api-*
-    fields:
-      - status
-      - metadata.annotations.example\.com/build-id
-  - kind: Namespace
-    name: org-*
-    fields:
-      - metadata...kubernetes\.io/metadata\.name
-```
-
-Each `removeFields` rule matches resources by `group`, `kind`, `namespace`, and `name` using globbing, then deletes the listed fields from every match. If one of those matchers is omitted, it behaves like `*`. Cluster-scoped resources use the namespace `_cluster` for matching. Fields use dot notation, literal dots in map keys must be escaped as `\.` and individual path segments can use `*` or `?` glob wildcards, for example `metadata.labels.kapp\.k14s\.io/*`. The token `...` means recursive descent across zero or more nested levels, and paths automatically walk lists, so `webhooks.clientConfig.caBundle` removes `caBundle` from every webhook entry.
-
-The same config file can also list `skipResources` rules, which drop entire resources rather than just clearing fields:
-
-```yaml
-skipResources:
-  - kind: Event
-  - group: apps
-    kind: Deployment
-    namespace: test-*
-    name: debug-*
-```
-
-The first rule drops every `Event` resource cluster-wide. The second drops Deployments named `debug-*` in any `test-*` namespace.
-
-Each `skipResources` rule matches by `group`, `kind`, `namespace`, and `name` using the same globbing as `removeFields`, and **all** specified matchers must match for the resource to be skipped. Omitted matchers behave like `*`. Cluster-scoped resources use the namespace `_cluster`. A skip rule must set at least one matcher.
-
-Note: a rule like `kind: Namespace, name: foo-*` only drops the cluster-scoped `Namespace` object itself — it does *not* drop resources living inside `foo-*` namespaces. To skip a namespace **and** everything inside it, use `excludeNamespaces` (see below).
-
-To exclude entire namespaces from the dump — including the `Namespace` object **and** every resource inside — use the top-level `excludeNamespaces` key, or the `--exclude-namespaces` flag:
-
-```yaml
-excludeNamespaces:
-  - foo-*
-  - test-*
-```
+To exclude entire namespaces from the dump — including the `Namespace` object **and** every resource inside — use the `excludeNamespaces` key of the config, or the `--exclude-namespaces` flag:
 
 ```terminal
 dumpall --exclude-namespaces 'foo-*,test-*'
@@ -119,10 +86,10 @@ The easiest way is to run the code like this:
 ```terminal
 go run github.com/guettli/dumpall@latest
 
-Written: out/cert-manager/v1.Service/cert-manager.yaml
-Written: out/cert-manager/v1.Service/cert-manager-webhook.yaml
-Written: out/default/v1.Service/kubernetes.yaml
-Written: out/_cluster/v1.Namespace/cert-manager.yaml    <-- non-namespaces resources use the directory "_cluster"
+Written: out/cert-manager/Service/cert-manager.yaml
+Written: out/cert-manager/Service/cert-manager-webhook.yaml
+Written: out/default/Service/kubernetes.yaml
+Written: out/_cluster/Namespace/cert-manager.yaml    <-- cluster-scoped resources use the directory "_cluster"
 ...
 ```
 
@@ -196,24 +163,18 @@ Now you want to know: what will happen when these files get applied. You could u
 ArgoCD has that permission. Additionally, it
 will show many differences that are not real differences (like ArgoCD labels).
 
-You can see a clean diff like this:
-
-Generate a normalized version of your desired-state:
-
-```bash
-go run github.com/guettli/dumpall@latest --read-yaml-from ./generated --ignore-config-use-common -o desired-state
-```
-
-Generate a normalized version of the current state:
+You can see a clean diff like this. Dump the current state of exactly the
+resources in `generated`, normalized with the same common config:
 
 ```bash
 go run github.com/guettli/dumpall@latest --read-resource-names-from ./generated --ignore-config-use-common -o current-state
 ```
 
-Now compare both directories with your favorite tool, like `diff -r` or `meld`:
+Compare it with the desired state. `kubenorm diff` normalizes both sides and
+pairs resources by identity, so the file layout of `generated` does not matter:
 
 ```bash
-diff -r current-state desired-state
+go run github.com/guettli/kubenorm@latest diff current-state ./generated
 ```
 
 I guess you use Pull-Requests for GitOps. You could make your CI create the above output for each
@@ -223,7 +184,7 @@ are different. Especially, if you modify `ignoreDifference` of ArgoCD.
 
 ## Related
 
-- [kubenorm](https://github.com/guettli/kubenorm) Normalize Kubernetes YAML files on disk (the normalization engine of dumpall).
+- [kubenorm](https://github.com/guettli/kubenorm) Normalize Kubernetes YAML files on disk (Rendered Manifests Pattern). The normalization engine of dumpall.
 - [check-conditions](https://github.com/guettli/check-conditions) Tiny tool to check all conditions of all resources in your Kubernetes cluster.
 - [korphan](https://github.com/guettli/korphan) Find orphaned Kubernetes resources — those managed by neither a controller nor a GitOps tool.
 - [Thomas WOL: Working out Loud](https://github.com/guettli/wol) Articles, projects, and insights spanning various topics in software development.
