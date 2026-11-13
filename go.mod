@@ -63,3 +63,8 @@ require (
 	sigs.k8s.io/kustomize/kyaml v0.19.0
 	sigs.k8s.io/structured-merge-diff/v4 v4.6.0 // indirect
 )
+
+require github.com/guettli/kubenorm v0.0.0
+
+// TODO: remove before pushing, once github.com/guettli/kubenorm is released.
+replace github.com/guettli/kubenorm => ../kubenorm

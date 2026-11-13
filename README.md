@@ -39,6 +39,11 @@ To read existing YAML manifests instead of connecting to the api-server, use `--
 dumpall --read-yaml-from ./manifests --ignore-config-use-common --out-dir ./normalized
 ```
 
+The normalization (ignore rules, common config, output layout) is implemented in
+[kubenorm](https://github.com/guettli/kubenorm), which dumpall uses as a library. If you only work
+with files on disk (helm output, Rendered Manifests Pattern, CI checks), use kubenorm directly: it
+reads stdin, has `kubenorm norm --check` and `kubenorm diff`, and does not pull in client-go.
+
 To dump only a specific subset of resources from the api-server, use `--read-resource-names-from` with a file or directory of YAML manifests. dumpall reads the `kind`, `namespace`, and `name` of each resource in those files and dumps only the matching resources from the cluster. This pairs well with the [Rendered Manifests Pattern](https://akuity.io/blog/the-rendered-manifests-pattern):
 
 ```terminal
@@ -218,6 +223,7 @@ are different. Especially, if you modify `ignoreDifference` of ArgoCD.
 
 ## Related
 
+- [kubenorm](https://github.com/guettli/kubenorm) Normalize Kubernetes YAML files on disk (the normalization engine of dumpall).
 - [check-conditions](https://github.com/guettli/check-conditions) Tiny tool to check all conditions of all resources in your Kubernetes cluster.
 - [korphan](https://github.com/guettli/korphan) Find orphaned Kubernetes resources — those managed by neither a controller nor a GitOps tool.
 - [Thomas WOL: Working out Loud](https://github.com/guettli/wol) Articles, projects, and insights spanning various topics in software development.
