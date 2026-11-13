@@ -112,7 +112,7 @@ fi
 
 redacted_secret_file="${redacted_outdir}/${TEST_NAMESPACE}/Secret/${TEST_SECRET_NAME}.yaml"
 assert_file_exists "${redacted_secret_file}"
-assert_file_contains "${redacted_secret_file}" "password: REDCATED-BY-DUMPALL"
+assert_file_contains "${redacted_secret_file}" "password: REDACTED"
 assert_file_not_contains "${redacted_secret_file}" "${TEST_SECRET_BASE64}"
 assert_file_not_contains "${redacted_secret_file}" "kubectl.kubernetes.io/last-applied-configuration"
 
@@ -121,13 +121,13 @@ go run main.go --out-dir "${raw_outdir}" --quiet --dump-secrets
 raw_secret_file="${raw_outdir}/${TEST_NAMESPACE}/Secret/${TEST_SECRET_NAME}.yaml"
 assert_file_exists "${raw_secret_file}"
 assert_file_contains "${raw_secret_file}" "password: ${TEST_SECRET_BASE64}"
-assert_file_not_contains "${raw_secret_file}" "password: REDCATED-BY-DUMPALL"
+assert_file_not_contains "${raw_secret_file}" "password: REDACTED"
 
 filtered_outdir="${tmp_root}/filtered"
 go run main.go --out-dir "${filtered_outdir}" --quiet --namespaces "${TEST_NAMESPACE}" --name-regex "${TEST_NAME_REGEX}"
 filtered_secret_file="${filtered_outdir}/${TEST_NAMESPACE}/Secret/${TEST_SECRET_NAME}.yaml"
 assert_file_exists "${filtered_secret_file}"
-assert_file_contains "${filtered_secret_file}" "password: REDCATED-BY-DUMPALL"
+assert_file_contains "${filtered_secret_file}" "password: REDACTED"
 
 if [[ -d "${filtered_outdir}/kube-system" ]]; then
 	echo "Did not expect kube-system dump in namespace-filtered output" >&2
