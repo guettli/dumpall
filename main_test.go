@@ -333,9 +333,9 @@ data:
 		quiet:     true,
 	}
 
-	err = readYamlFromDir(inputDir, opts)
+	err = readYAMLFrom(inputDir, opts)
 	if err != nil {
-		t.Fatalf("readYamlFromDir returned error: %v", err)
+		t.Fatalf("readYAMLFrom returned error: %v", err)
 	}
 
 	_, err = os.Stat(filepath.Join(outputDir, "default", "ConfigMap", "cfg.yaml"))
@@ -1031,7 +1031,7 @@ func TestReadYamlFromDir_AppliesIgnoreConfigFile(t *testing.T) {
 
 	outputDir := filepath.Join(dir, "out")
 
-	err = readYamlFromDir(inputDir, finalizedOpts(t, &options{outputDir: outputDir, quiet: true, ignoreConfigFile: configFile}))
+	err = readYAMLFrom(inputDir, finalizedOpts(t, &options{outputDir: outputDir, quiet: true, ignoreConfigFile: configFile}))
 	if err != nil {
 		t.Fatal(err)
 	}
