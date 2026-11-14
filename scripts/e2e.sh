@@ -68,6 +68,10 @@ done
 kubectl get --raw /readyz >/dev/null || { tail -20 "$work/apiserver.log"; exit 1; }
 
 kubectl apply -f "$manifests" >/dev/null
+# The first apply creates the CRD but not yet the Widget.
+kubectl apply -f "$repo/scripts/testdata/files/widget.yaml" >/dev/null 2>&1 || true
+kubectl wait --for condition=established crd/widgets.example.com >/dev/null
+kubectl apply -f "$repo/scripts/testdata/files/widget.yaml" >/dev/null
 kubectl create secret generic e2e-secret -n dumpall-e2e --from-literal=password=s3cret >/dev/null
 secret_b64=$(printf s3cret | base64)
 
@@ -97,6 +101,10 @@ dumpall -o "$work/kind" --kind ConfigMap --namespaces dumpall-e2e
 other=$(find "$work/kind" -type f ! -name _dumpall_meta.yaml ! -path '*/ConfigMap/*')
 [ -z "$other" ] || fail "--kind ConfigMap dumped: $other"
 
+echo "--- quantities in custom resources are canonical (CRDs of the cluster)"
+dumpall -o "$work/cr" --namespaces dumpall-e2e --kind Widget
+grep -q 'size: 2Gi' "$work/cr/dumpall-e2e/example.com_Widget/w.yaml" || fail "CR quantity from the api-server not canonical"
+
 echo "--- --read-yaml-from is normalized like kubenorm norm (CRD quantities)"
 dumpall -o "$work/files" --ignore-config-use-common --read-yaml-from "$repo/scripts/testdata/files"
 grep -q 'size: 2Gi' "$work/files/dumpall-e2e/example.com_Widget/w.yaml" || fail "CRD quantity not canonical"
@@ -109,5 +117,13 @@ kubenorm norm --check "$work/common" || fail "dumpall output is not normalized (
 echo "--- Pre-Deploy: cluster state equals the applied manifests"
 dumpall -o "$work/current" --ignore-config-use-common --read-resource-names-from "$manifests"
 kubenorm diff "$work/current" "$manifests" || fail "cluster state differs from $manifests (diff above)"
+
+echo "--- two resources mapping to the same file are an error"
+kubectl create clusterrole 'e2e:x' --verb get --resource pods >/dev/null
+kubectl create clusterrole 'e2e_x' --verb get --resource pods >/dev/null
+if dumpall -o "$work/collide" --kind ClusterRole --name-regex '^e2e.x$' 2>"$work/collide.log"; then
+	fail "dump with colliding file names succeeded"
+fi
+grep -q 'two resources map to the same file' "$work/collide.log" || { cat "$work/collide.log"; fail "unexpected error"; }
 
 echo "ok (kubenorm $kubenorm_version)"

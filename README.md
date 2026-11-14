@@ -77,10 +77,13 @@ Ignore rules are optional and off by default:
 is documented in the [kubenorm README](https://github.com/guettli/kubenorm#config).
 Use `kubenorm explain` to see which rule changes or drops what.
 
-When dumping from an api-server, quantities in custom resources are written as
-the api-server returns them (`1000m`, not `"1"`): kubenorm canonicalizes them
-only when the CRD is part of the same input (`kubenorm norm`,
-`--read-yaml-from`).
+dumpall reads the CRDs of the cluster, so quantities in custom resources are
+canonicalized like in `kubenorm norm` (`1000m` becomes `"1"`). Without the
+permission to list CRDs it warns and writes them as the api-server returns
+them.
+
+dumpall never overwrites a file: if two resources map to the same path
+(`a:b` and `a_b`, since `:` becomes `_`), the dump fails.
 
 To exclude entire namespaces from the dump — including the `Namespace` object **and** every resource inside — use the `excludeNamespaces` key of the config, or the `--exclude-namespaces` flag:
 

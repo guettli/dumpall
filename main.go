@@ -68,6 +68,9 @@ type dumpMeta struct {
 }
 
 type options struct {
+	// norm caches the normalize options once the CRDs of the cluster are
+	// known, see loadCRDs.
+	norm                  *normalize.Options
 	outputDir             string
 	quiet                 bool
 	dumpSecrets           bool
@@ -336,6 +339,10 @@ func finalizeOpts(opts *options) error {
 // normOptions translates the dumpall flags into kubenorm options. It builds
 // a fresh value on every call, so it is safe for concurrent writers.
 func (o *options) normOptions() *normalize.Options {
+	if o.norm != nil {
+		return o.norm
+	}
+
 	// Errors were reported by finalizeOpts already.
 	nameRegex, _ := normalize.ParseNameRegex(o.nameRegex)
 
@@ -952,6 +959,35 @@ func validateKindFilterMatchesResources(kindFilter []string, resourceList []*met
 	return fmt.Errorf("--kind: no resource types found matching: %s (use `kubectl api-resources` to list available kinds)", strings.Join(kindFilter, ", "))
 }
 
+var crdGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
+
+// loadCRDs passes the CRDs of the cluster to kubenorm, so quantities in
+// custom resources are canonicalized like in kubenorm norm. Without the
+// permission to list CRDs the dump goes on without them.
+func loadCRDs(client dynamic.Interface, opts *options) error {
+	list, err := client.Resource(crdGVR).List(context.Background(), meta.ListOptions{})
+	if apierrors.IsForbidden(err) {
+		if !opts.quiet {
+			fmt.Fprintln(os.Stderr, "Warning: cannot list CustomResourceDefinitions, quantities in custom resources stay as the api-server returns them")
+		}
+
+		return nil
+	}
+
+	if err != nil {
+		return fmt.Errorf("failed to list CustomResourceDefinitions: %w", err)
+	}
+
+	crds := make([]normalize.Resource, 0, len(list.Items))
+	for _, item := range list.Items {
+		crds = append(crds, normalize.Resource{Object: item.Object, Source: "api-server"})
+	}
+
+	opts.norm = opts.normOptions().WithCRDs(crds)
+
+	return nil
+}
+
 func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourceList, opts *options) error {
 	err := resolveExcludeNamespaceFieldSelector(client, opts)
 	if err != nil {
@@ -964,6 +1000,11 @@ func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourc
 	}
 
 	err = validateKindFilterMatchesResources(opts.kindFilter, resourceList)
+	if err != nil {
+		return err
+	}
+
+	err = loadCRDs(client, opts)
 	if err != nil {
 		return err
 	}
@@ -1242,10 +1283,18 @@ func writeYAML(filePath string, obj map[string]any, opts *options) error {
 		return fmt.Errorf("normalizing %s: %w", filePath, err)
 	}
 
-	file, err := os.Create(filePath)
+	// O_EXCL: the output directory starts empty, so an existing file means
+	// two resources map to the same path ("a:b" and "a_b", or "A" and "a" on a
+	// case-insensitive file system). Fail instead of overwriting one.
+	file, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, fs.ErrExist) {
+		return fmt.Errorf("%s already exists: two resources map to the same file", filePath)
+	}
+
 	if err != nil {
 		return fmt.Errorf("failed to create file %s: %w", filePath, err)
 	}
+
 	defer file.Close()
 
 	header := []string{"https://github.com/guettli/dumpall version: " + getBuildVersion()}
