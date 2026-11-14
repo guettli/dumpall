@@ -87,7 +87,7 @@ type options struct {
 	comment               string
 	fileName              string
 	dir                   string
-	namespaceFilter       map[string]struct{}
+	namespaceFilter       []string
 	kindFilter            []string
 	// normCfg holds the rules from the common config, --ignore-config,
 	// --skip-name-glob and --exclude-namespaces (see finalizeOpts).
@@ -993,7 +993,7 @@ func validateNamespaceFilter(client dynamic.Interface, opts *options) error {
 
 	missing := make([]string, 0)
 
-	for ns := range opts.namespaceFilter {
+	for _, ns := range opts.namespaceFilter {
 		if _, ok := existing[ns]; !ok {
 			missing = append(missing, ns)
 		}
