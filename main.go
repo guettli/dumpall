@@ -23,6 +23,7 @@ import (
 	"github.com/hexops/gotextdiff/span"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	meta "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -1091,6 +1092,13 @@ func enqueueGVRItems(client dynamic.Interface, job gvrListJob, opts *options, wr
 	}
 
 	list, err := client.Resource(job.gvr).List(context.TODO(), listOpts)
+	if err != nil && listOpts.FieldSelector != "" && apierrors.IsBadRequest(err) {
+		// Some resources (podcertificaterequests) do not support the
+		// metadata.namespace field selector. shouldProcessItem drops the
+		// excluded namespaces client-side.
+		list, err = client.Resource(job.gvr).List(context.TODO(), meta.ListOptions{})
+	}
+
 	if err != nil {
 		return fmt.Errorf("failed to list resources for %s: %w", job.gvr.Resource, err)
 	}
