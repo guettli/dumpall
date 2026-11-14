@@ -16,6 +16,11 @@ out/_cluster/Namespace/kube-system.yaml     (cluster-scoped resources)
 
 The YAML is written like `kubectl get -o yaml` does.
 
+Changed with the switch to kubenorm: list items are no longer indented (like
+kubectl), and redacted values are `REDACTED` (was `REDCATED-BY-DUMPALL`). The
+first dump after updating changes most files; `dumpall diff` is not affected,
+it normalizes both sides.
+
 dumpall talks to the api-server. The normalization (ignore rules, common
 config, output layout) lives in [kubenorm](https://github.com/guettli/kubenorm),
 which dumpall uses as a library. **If you only work with YAML files on disk**
@@ -44,8 +49,9 @@ skipped. Resources with non-controlling owner references are still dumped.
 - The `kube-root-ca.crt` ConfigMap that the root-ca-cert-publisher creates in every namespace.
 
 `--read-yaml-from` reads a YAML file or directory instead of connecting to the
-api-server, and `dumpall check-normalized` checks files. Both still work, but
-for files on disk kubenorm is the better tool:
+api-server and processes it like `kubenorm norm` (CRDs in the input are known,
+SOPS-encrypted documents are dropped). `dumpall check-normalized` checks
+files. Both still work, but for files on disk kubenorm is the better tool:
 
 ```terminal
 # instead of: dumpall --read-yaml-from ./manifests --ignore-config-use-common -o ./normalized
@@ -71,6 +77,11 @@ Ignore rules are optional and off by default:
 is documented in the [kubenorm README](https://github.com/guettli/kubenorm#config).
 Use `kubenorm explain` to see which rule changes or drops what.
 
+When dumping from an api-server, quantities in custom resources are written as
+the api-server returns them (`1000m`, not `"1"`): kubenorm canonicalizes them
+only when the CRD is part of the same input (`kubenorm norm`,
+`--read-yaml-from`).
+
 To exclude entire namespaces from the dump — including the `Namespace` object **and** every resource inside — use the `excludeNamespaces` key of the config, or the `--exclude-namespaces` flag:
 
 ```terminal
@@ -81,7 +92,8 @@ Patterns are globs and resolve against the live namespace list. When connected t
 
 ## Via `go run`
 
-The easiest way is to run the code like this:
+The easiest way is to run the code like this (needs Go 1.27, `go` downloads it
+unless `GOTOOLCHAIN=local` is set):
 
 ```terminal
 go run github.com/guettli/dumpall@latest
@@ -170,8 +182,10 @@ resources in `generated`, normalized with the same common config:
 go run github.com/guettli/dumpall@latest --read-resource-names-from ./generated --ignore-config-use-common -o current-state
 ```
 
-Compare it with the desired state. `kubenorm diff` normalizes both sides and
-pairs resources by identity, so the file layout of `generated` does not matter:
+Compare it with the desired state. `kubenorm diff` normalizes both sides again
+and pairs resources by identity, so the file layout of `generated` does not
+matter. Use the kubenorm version that dumpall uses (see its `go.mod`) or a
+newer one with the same major version:
 
 ```bash
 go run github.com/guettli/kubenorm@latest diff current-state ./generated

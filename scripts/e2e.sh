@@ -11,7 +11,7 @@ set -euo pipefail
 
 k8s_version=${K8S_VERSION:-1.37.0}
 repo=$(realpath "$(dirname "$0")/..")
-manifests=$repo/scripts/testdata/e2e.yaml
+manifests=$repo/scripts/testdata/files/e2e.yaml
 work=$(mktemp -d)
 etcd_pid='' apiserver_pid=''
 cleanup() {
@@ -84,6 +84,16 @@ echo "--- --namespaces and --name-regex"
 dumpall -o "$work/filtered" --namespaces dumpall-e2e --name-regex '^app-config$'
 count=$(find "$work/filtered" -type f ! -name _dumpall_meta.yaml | wc -l)
 [ "$count" = 1 ] || { find "$work/filtered" -type f; fail "want 1 file, got $count"; }
+
+echo "--- --kind"
+dumpall -o "$work/kind" --kind ConfigMap --namespaces dumpall-e2e
+other=$(find "$work/kind" -type f ! -name _dumpall_meta.yaml ! -path '*/ConfigMap/*')
+[ -z "$other" ] || fail "--kind ConfigMap dumped: $other"
+
+echo "--- --read-yaml-from is normalized like kubenorm norm (CRD quantities)"
+dumpall -o "$work/files" --ignore-config-use-common --read-yaml-from "$repo/scripts/testdata/files"
+grep -q 'size: 2Gi' "$work/files/dumpall-e2e/example.com_Widget/w.yaml" || fail "CRD quantity not canonical"
+kubenorm norm --check "$work/files" || fail "--read-yaml-from output is not normalized"
 
 echo "--- the common config output is normalized for kubenorm"
 dumpall -o "$work/common" --ignore-config-use-common

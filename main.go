@@ -366,16 +366,7 @@ func runDump(opts *options) error {
 	}
 
 	if opts.readYamlFrom != "" {
-		info, err := os.Stat(opts.readYamlFrom)
-		if err != nil {
-			return fmt.Errorf("failed to inspect --read-yaml-from path %q: %w", opts.readYamlFrom, err)
-		}
-
-		if info.IsDir() {
-			return readYamlFromDir(opts.readYamlFrom, opts)
-		}
-
-		return readYamlFromFile(opts.readYamlFrom, opts)
+		return readYAMLFrom(opts.readYamlFrom, opts)
 	}
 
 	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
@@ -777,7 +768,20 @@ func compareDirs(dirA, labelA, dirB, labelB, sourceA string) error {
 	return nil
 }
 
-func readYamlFromFile(fileName string, opts *options) error {
+// readYAMLFrom reads a YAML file or directory and processes all resources
+// at once, like kubenorm norm: CRDs in the input are known (quantity fields,
+// scope) and SOPS-encrypted documents are dropped.
+func readYAMLFrom(path string, opts *options) error {
+	resources, err := normalize.ReadPaths([]string{path}, nil)
+	if err != nil {
+		return fmt.Errorf("--read-yaml-from: %w", err)
+	}
+
+	resources, err = opts.normOptions().Process(resources)
+	if err != nil {
+		return fmt.Errorf("--read-yaml-from: %w", err)
+	}
+
 	writeJobs, events, writerDone, writerCount := startWriteWorkers(opts)
 	producerDone := make(chan struct{}, 1)
 
@@ -786,71 +790,16 @@ func readYamlFromFile(fileName string, opts *options) error {
 			producerDone <- struct{}{}
 		}()
 
-		bytes, err := os.ReadFile(fileName)
-		if err != nil {
-			events <- processingEvent{
-				err: fmt.Errorf("failed to read file %s: %w", fileName, err),
+		// writeYAML normalizes again; normalizing is idempotent.
+		for _, r := range resources {
+			u := r.Unstructured()
+			if shouldProcessItem(u, r.Namespaced(), opts) {
+				writeJobs <- resourceWriteJob{item: u, isNamespaced: r.Namespaced(), sourceName: r.Source}
 			}
-
-			return
-		}
-
-		err = enqueueYAMLBytesAsJobs(bytes, fileName, opts, writeJobs)
-		if err != nil {
-			events <- processingEvent{err: err}
 		}
 	}()
 
 	closeEventsWhenDone(producerDone, 1, writerDone, writerCount, writeJobs, events)
-
-	return finalizeProcessing(events, opts)
-}
-
-func readYamlFromDir(dirPath string, opts *options) error {
-	yamlFiles, err := findYAMLFiles(dirPath)
-	if err != nil {
-		return err
-	}
-
-	writeJobs, events, writerDone, writerCount := startWriteWorkers(opts)
-
-	fileWorkerCount := boundedWorkerCount(len(yamlFiles))
-	fileJobs := make(chan string, fileWorkerCount*2)
-	producerDone := make(chan struct{}, fileWorkerCount)
-
-	for range fileWorkerCount {
-		go func() {
-			defer func() {
-				producerDone <- struct{}{}
-			}()
-
-			for filePath := range fileJobs {
-				bytes, err := os.ReadFile(filePath)
-				if err != nil {
-					events <- processingEvent{
-						err: fmt.Errorf("failed to read file %s: %w", filePath, err),
-					}
-
-					continue
-				}
-
-				err = enqueueYAMLBytesAsJobs(bytes, filePath, opts, writeJobs)
-				if err != nil {
-					events <- processingEvent{err: err}
-				}
-			}
-		}()
-	}
-
-	go func() {
-		for _, filePath := range yamlFiles {
-			fileJobs <- filePath
-		}
-
-		close(fileJobs)
-	}()
-
-	closeEventsWhenDone(producerDone, fileWorkerCount, writerDone, writerCount, writeJobs, events)
 
 	return finalizeProcessing(events, opts)
 }
@@ -949,31 +898,6 @@ func isYAMLFile(filePath string) bool {
 	default:
 		return false
 	}
-}
-
-func enqueueYAMLBytesAsJobs(bytes []byte, sourceName string, opts *options, jobs chan<- resourceWriteJob) error {
-	// Parse like kubectl (YAML 1.1, Lists expanded), shared with kubenorm.
-	resources, err := normalize.ParseYAML(bytes, sourceName)
-	if err != nil {
-		return fmt.Errorf("parsing YAML: %w", err)
-	}
-
-	for _, r := range resources {
-		u := r.Unstructured()
-		isNamespaced := r.Namespaced()
-
-		if !shouldProcessItem(u, isNamespaced, opts) {
-			continue
-		}
-
-		jobs <- resourceWriteJob{
-			item:         u,
-			isNamespaced: isNamespaced,
-			sourceName:   sourceName,
-		}
-	}
-
-	return nil
 }
 
 func validateNamespaceFilter(client dynamic.Interface, opts *options) error {
