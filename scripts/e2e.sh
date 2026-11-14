@@ -85,6 +85,13 @@ dumpall -o "$work/filtered" --namespaces dumpall-e2e --name-regex '^app-config$'
 count=$(find "$work/filtered" -type f ! -name _dumpall_meta.yaml | wc -l)
 [ "$count" = 1 ] || { find "$work/filtered" -type f; fail "want 1 file, got $count"; }
 
+echo "--- --exclude-namespaces"
+dumpall -o "$work/excluded" --exclude-namespaces 'dumpall-*' >"$work/excluded.log" 2>&1
+! grep . "$work/excluded.log" || fail "--exclude-namespaces skipped resources (log above)"
+[ ! -e "$work/excluded/dumpall-e2e" ] || fail "excluded namespace dumped"
+[ ! -e "$work/excluded/_cluster/Namespace/dumpall-e2e.yaml" ] || fail "excluded Namespace object dumped"
+[ -f "$work/excluded/default/Service/kubernetes.yaml" ] || fail "other namespaces missing"
+
 echo "--- --kind"
 dumpall -o "$work/kind" --kind ConfigMap --namespaces dumpall-e2e
 other=$(find "$work/kind" -type f ! -name _dumpall_meta.yaml ! -path '*/ConfigMap/*')
