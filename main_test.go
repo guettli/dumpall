@@ -355,9 +355,7 @@ func TestShouldProcessItem(t *testing.T) {
 	t.Parallel()
 
 	opts := &options{
-		namespaceFilter: map[string]struct{}{
-			"alpha": {},
-		},
+		namespaceFilter: []string{"alpha"},
 	}
 
 	tests := []struct {
