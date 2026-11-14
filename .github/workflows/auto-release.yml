@@ -3,6 +3,9 @@ name: Auto Release
 on:
   push:
     branches: [main]
+  # Manual run, for example after GitHub disabled the schedule for
+  # inactivity and a push to main was missed.
+  workflow_dispatch:
   schedule:
     # Every 6 hours — catches unreleased commits if push event was missed
     - cron: '0 */6 * * *'
