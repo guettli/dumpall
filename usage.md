@@ -7,19 +7,20 @@ dumpall [command] [global flags] [command flags]
 ```
 
 ### Commands
+- [dumpall check-normalized](#dumpall-check-normalized)
+- [dumpall completion](#dumpall-completion)
+- [dumpall completion bash](#dumpall-completion-bash)
+- [dumpall completion fish](#dumpall-completion-fish)
+- [dumpall completion help](#dumpall-completion-help)
+- [dumpall completion powershell](#dumpall-completion-powershell)
+- [dumpall completion zsh](#dumpall-completion-zsh)
+- [dumpall diff](#dumpall-diff)
+- [dumpall gendocs](#dumpall-gendocs)
+- [dumpall help](#dumpall-help)
+- [dumpall show-common-ignore-config](#dumpall-show-common-ignore-config)
+- [dumpall top-churn](#dumpall-top-churn)
+- [dumpall version](#dumpall-version)
 
-* [dumpall check-normalized](#dumpall-check-normalized)
-* [dumpall completion](#dumpall-completion)
-* [dumpall completion bash](#dumpall-completion-bash)
-* [dumpall completion fish](#dumpall-completion-fish)
-* [dumpall completion help](#dumpall-completion-help)
-* [dumpall completion powershell](#dumpall-completion-powershell)
-* [dumpall completion zsh](#dumpall-completion-zsh)
-* [dumpall diff](#dumpall-diff)
-* [dumpall gendocs](#dumpall-gendocs)
-* [dumpall help](#dumpall-help)
-* [dumpall show-common-ignore-config](#dumpall-show-common-ignore-config)
-* [dumpall version](#dumpall-version)
 
 # Commands
 
@@ -127,7 +128,8 @@ dumpall completion fish [flags]
 
 ## `dumpall completion help`
 
-Help about any command
+Help provides help for any command in the application.
+Simply type completion help [path to command] for full details.
 
 ```text
 dumpall completion help [command] [flags]
@@ -241,7 +243,8 @@ dumpall gendocs [flags]
 
 ## `dumpall help`
 
-Help about any command
+Help provides help for any command in the application.
+Simply type dumpall help [path to command] for full details.
 
 ```text
 dumpall help [command] [flags]
@@ -265,6 +268,29 @@ dumpall show-common-ignore-config [flags]
 
 ```text
   -h, --help   help for show-common-ignore-config
+```
+
+## `dumpall top-churn`
+
+Compare two dump directories and list resources sorted by generation increase per hour.
+Both dumps must have been created from the same cluster.
+
+With --dump-wait-dump the command takes both dumps itself, waits between them, then compares.
+The dump directories are kept on disk unless --remove is given.
+Use --namespaces and --kind to limit the scope of the automatic dumps (both accept comma-separated values).
+
+```text
+dumpall top-churn [<dump-a> <dump-b>] [flags]
+```
+
+### Command Flags
+
+```text
+      --dump-wait-dump string[="7m"]   Take two dumps with a wait between them, then compare (default wait: 7m)
+  -h, --help                           help for top-churn
+      --kind string                    Comma-separated list of kind globs to dump (for --dump-wait-dump, e.g. 'Deployment,StatefulSet')
+  -n, --namespaces string              Comma-separated list of namespaces to dump (for --dump-wait-dump)
+      --remove                         Remove the dump directories after comparison (for --dump-wait-dump)
 ```
 
 ## `dumpall version`
