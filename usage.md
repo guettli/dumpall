@@ -2,6 +2,10 @@
 
 Read resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.
 
+The normalization is done by kubenorm (https://github.com/guettli/kubenorm).
+For YAML files on disk (helm output, Rendered Manifests Pattern, CI checks)
+use kubenorm directly.
+
 ```text
 dumpall [command] [global flags] [command flags]
 ```
