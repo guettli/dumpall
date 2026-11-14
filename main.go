@@ -151,9 +151,13 @@ func buildRootCmd() *cobra.Command {
 	opts := &options{outputDir: "out"}
 
 	rootCmd := &cobra.Command{
-		Use:          toolNameForUsageOutput,
-		Short:        "Dump all Kubernetes resources to YAML files",
-		Long:         "Read resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.",
+		Use:   toolNameForUsageOutput,
+		Short: "Dump all Kubernetes resources to YAML files",
+		Long: `Read resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.
+
+The normalization is done by kubenorm (https://github.com/guettli/kubenorm).
+For YAML files on disk (helm output, Rendered Manifests Pattern, CI checks)
+use kubenorm directly.`,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(_ *cobra.Command, _ []string) error {
