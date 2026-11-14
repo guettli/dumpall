@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
+      - name: Run pre-commit
+        # Fails if a hook changed files (go mod tidy, usage.md, README).
+        run: pre-commit run --all-files --show-diff-on-failure
+
+      - name: Test with race detector
+        run: go test -race ./...
+
+  e2e:
+    # dumpall against a real kube-apiserver (envtest binaries, no container
+    # runtime needed), output checked with kubenorm.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: End-to-end test
+        run: scripts/e2e.sh
