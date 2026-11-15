@@ -16,18 +16,40 @@ out/_cluster/Namespace/kube-system.yaml     (cluster-scoped resources)
 
 The YAML is written like `kubectl get -o yaml` does.
 
-Changed with the switch to kubenorm: list items are no longer indented (like
-kubectl), and redacted values are `REDACTED` (was `REDCATED-BY-DUMPALL`). The
-first dump after updating changes most files; `dumpall diff` is not affected,
-it normalizes both sides.
-
 dumpall talks to the api-server. The normalization (ignore rules, common
 config, output layout) lives in [kubenorm](https://github.com/guettli/kubenorm),
 which dumpall uses as a library. **If you only work with YAML files on disk**
-(helm output, CI checks, the
+(Helm output, CI checks, the
 [Rendered Manifests Pattern](https://github.com/guettli/kubenorm#rendered-manifests-pattern)),
 use kubenorm directly: it reads stdin, has `kubenorm norm --check`,
 `kubenorm diff` and `kubenorm explain`, and does not pull in client-go.
+
+## Install
+
+With [mise](https://mise.jdx.dev), pinned to the latest release:
+
+```terminal
+mise use --pin github:guettli/dumpall@latest
+```
+
+This writes the exact version to `mise.toml`; `mise upgrade --bump
+github:guettli/dumpall` moves to a newer release. Alternatives: download a
+binary from the [releases](https://github.com/guettli/dumpall/releases), or
+`go run github.com/guettli/dumpall@latest` (needs Go).
+
+Dump the cluster of your current kubeconfig context:
+
+```terminal
+dumpall
+
+Written: out/cert-manager/Service/cert-manager.yaml
+Written: out/cert-manager/Service/cert-manager-webhook.yaml
+Written: out/default/Service/kubernetes.yaml
+Written: out/_cluster/Namespace/cert-manager.yaml    <-- cluster-scoped resources use the directory "_cluster"
+...
+```
+
+## Options
 
 The resources of kind Secret are not dumped by default. If needed, use `--dump-secrets`.
 
@@ -59,12 +81,7 @@ files. Both still work, but for files on disk kubenorm is the better tool:
 kubenorm norm ./manifests -o ./normalized
 ```
 
-To dump only a specific subset of resources from the api-server, use `--read-resource-names-from` with a file or directory of YAML manifests. dumpall reads the `kind`, `namespace`, and `name` of each resource in those files and dumps only the matching resources from the cluster. This pairs well with the [Rendered Manifests Pattern](https://github.com/guettli/kubenorm#rendered-manifests-pattern):
-
-```terminal
-# Dump only the resources described in your rendered manifests directory
-dumpall --read-resource-names-from ./zz_rendered --out-dir ./cluster-state
-```
+To dump only a specific subset of resources from the api-server, use `--read-resource-names-from` with a file or directory of YAML manifests. dumpall reads the `kind`, `namespace`, and `name` of each resource in those files and dumps only the matching resources from the cluster. See [Pre-Deploy](#pre-deploy).
 
 Ignore rules are optional and off by default:
 
@@ -89,33 +106,7 @@ To exclude entire namespaces from the dump — including the `Namespace` object 
 dumpall --exclude-namespaces 'foo-*,test-*'
 ```
 
-Patterns are globs and resolve against the live namespace list. When connected to an api-server, dumpall passes a `metadata.namespace!=...` field selector on every namespaced `List` call, so excluded namespaces are filtered server-side and their resources never cross the wire — much faster than filtering client-side when one excluded namespace is huge. In file/dir input mode the same patterns are applied client-side.
-
-## Install
-
-With [mise](https://mise.jdx.dev), pinned to the latest release:
-
-```terminal
-mise use --pin github:guettli/dumpall@latest
-```
-
-This writes the exact version to `mise.toml`; `mise upgrade --bump
-github:guettli/dumpall` moves to a newer release. Alternatives: download a
-binary from the [releases](https://github.com/guettli/dumpall/releases), or
-`go run github.com/guettli/dumpall@latest` (needs Go 1.27, `go` downloads it
-unless `GOTOOLCHAIN=local` is set).
-
-Dump the cluster of your current kubeconfig context:
-
-```terminal
-dumpall
-
-Written: out/cert-manager/Service/cert-manager.yaml
-Written: out/cert-manager/Service/cert-manager-webhook.yaml
-Written: out/default/Service/kubernetes.yaml
-Written: out/_cluster/Namespace/cert-manager.yaml    <-- cluster-scoped resources use the directory "_cluster"
-...
-```
+Patterns are globs. Excluded namespaces are filtered by the api-server (field selector), so their resources are not transferred.
 
 ## Usage
 
@@ -203,8 +194,7 @@ dumpall --read-resource-names-from ./zz_rendered --ignore-config-use-common -o c
 Compare it with the desired state. `kubenorm diff` normalizes both sides again
 and pairs resources by identity, so the file layout of `zz_rendered` does not
 matter. Install kubenorm like dumpall
-(`mise use --pin github:guettli/kubenorm@latest`), the version of dumpall's
-`go.mod` or a newer one with the same major version:
+(`mise use --pin github:guettli/kubenorm@latest`):
 
 ```bash
 kubenorm diff current-state ./zz_rendered
