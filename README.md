@@ -24,9 +24,10 @@ it normalizes both sides.
 dumpall talks to the api-server. The normalization (ignore rules, common
 config, output layout) lives in [kubenorm](https://github.com/guettli/kubenorm),
 which dumpall uses as a library. **If you only work with YAML files on disk**
-(helm output, Rendered Manifests Pattern, CI checks), use kubenorm directly: it
-reads stdin, has `kubenorm norm --check`, `kubenorm diff` and `kubenorm explain`,
-and does not pull in client-go.
+(helm output, CI checks, the
+[Rendered Manifests Pattern](https://github.com/guettli/kubenorm#rendered-manifests-pattern)),
+use kubenorm directly: it reads stdin, has `kubenorm norm --check`,
+`kubenorm diff` and `kubenorm explain`, and does not pull in client-go.
 
 The resources of kind Secret are not dumped by default. If needed, use `--dump-secrets`.
 
@@ -58,11 +59,11 @@ files. Both still work, but for files on disk kubenorm is the better tool:
 kubenorm norm ./manifests -o ./normalized
 ```
 
-To dump only a specific subset of resources from the api-server, use `--read-resource-names-from` with a file or directory of YAML manifests. dumpall reads the `kind`, `namespace`, and `name` of each resource in those files and dumps only the matching resources from the cluster. This pairs well with the [Rendered Manifests Pattern](https://akuity.io/blog/the-rendered-manifests-pattern):
+To dump only a specific subset of resources from the api-server, use `--read-resource-names-from` with a file or directory of YAML manifests. dumpall reads the `kind`, `namespace`, and `name` of each resource in those files and dumps only the matching resources from the cluster. This pairs well with the [Rendered Manifests Pattern](https://github.com/guettli/kubenorm#rendered-manifests-pattern):
 
 ```terminal
 # Dump only the resources described in your rendered manifests directory
-dumpall --read-resource-names-from ./rendered-manifests --out-dir ./cluster-state
+dumpall --read-resource-names-from ./zz_rendered --out-dir ./cluster-state
 ```
 
 Ignore rules are optional and off by default:
@@ -93,13 +94,24 @@ dumpall --exclude-namespaces 'foo-*,test-*'
 
 Patterns are globs and resolve against the live namespace list. When connected to an api-server, dumpall passes a `metadata.namespace!=...` field selector on every namespaced `List` call, so excluded namespaces are filtered server-side and their resources never cross the wire — much faster than filtering client-side when one excluded namespace is huge. In file/dir input mode the same patterns are applied client-side.
 
-## Via `go run`
+## Install
 
-The easiest way is to run the code like this (needs Go 1.27, `go` downloads it
-unless `GOTOOLCHAIN=local` is set):
+With [mise](https://mise.jdx.dev), pinned to the latest release:
 
 ```terminal
-go run github.com/guettli/dumpall@latest
+mise use --pin github:guettli/dumpall@latest
+```
+
+This writes the exact version to `mise.toml`; `mise upgrade --bump
+github:guettli/dumpall` moves to a newer release. Alternatives: download a
+binary from the [releases](https://github.com/guettli/dumpall/releases), or
+`go run github.com/guettli/dumpall@latest` (needs Go 1.27, `go` downloads it
+unless `GOTOOLCHAIN=local` is set).
+
+Dump the cluster of your current kubeconfig context:
+
+```terminal
+dumpall
 
 Written: out/cert-manager/Service/cert-manager.yaml
 Written: out/cert-manager/Service/cert-manager-webhook.yaml
@@ -167,41 +179,43 @@ Then you can compare the changes with your favorite diff tool. I like [Meld](htt
 ```terminal
 mv out out-1
 
-go run github.com/guettli/dumpall@latest
+dumpall
 
 meld out-1 out
 ```
 
 ## Pre-Deploy
 
-Imagine you use the Rendered Manifest Pattern, and you have created your desired state in a bunch of
-YAML files in the directory called `generated`.
+You use the [Rendered Manifests Pattern](https://github.com/guettli/kubenorm#rendered-manifests-pattern):
+your desired state is a tree of YAML files in `zz_rendered/`, and Argo CD
+applies it.
 
-Now you want to know: what will happen when these files get applied. You could use `kubectl diff -R
--f generated`, but this requires permission to PATCH resources. In many setups only
-ArgoCD has that permission. Additionally, it
-will show many differences that are not real differences (like ArgoCD labels).
+Now you want to know: what will happen when these files get applied. You could
+use `kubectl diff -R -f zz_rendered`, but this requires permission to PATCH
+resources. In many setups only Argo CD has that permission. Additionally, it
+shows many differences that are not real differences (like Argo CD labels).
 
 You can see a clean diff like this. Dump the current state of exactly the
-resources in `generated`, normalized with the same common config:
+resources in `zz_rendered`, normalized with the same common config:
 
 ```bash
-go run github.com/guettli/dumpall@latest --read-resource-names-from ./generated --ignore-config-use-common -o current-state
+dumpall --read-resource-names-from ./zz_rendered --ignore-config-use-common -o current-state
 ```
 
 Compare it with the desired state. `kubenorm diff` normalizes both sides again
-and pairs resources by identity, so the file layout of `generated` does not
-matter. Use the kubenorm version that dumpall uses (see its `go.mod`) or a
-newer one with the same major version:
+and pairs resources by identity, so the file layout of `zz_rendered` does not
+matter. Install kubenorm like dumpall
+(`mise use --pin github:guettli/kubenorm@latest`), the version of dumpall's
+`go.mod` or a newer one with the same major version:
 
 ```bash
-go run github.com/guettli/kubenorm@latest diff current-state ./generated
+kubenorm diff current-state ./zz_rendered
 ```
 
-I guess you use Pull-Requests for GitOps. You could make your CI create the above output for each
-PR, so you directly see what will happen if you apply these changes. In most cases this will be
-identical to the changes you see in the PR (directory `generated` is in git). But sometimes things
-are different. Especially, if you modify `ignoreDifference` of ArgoCD.
+Your CI can create this output for each pull request, so you directly see what
+will happen if you apply the changes. In most cases this is identical to the
+change of `zz_rendered/` in the pull request. But sometimes things are
+different, especially if you modify `ignoreDifferences` of Argo CD.
 
 ## Related
 
