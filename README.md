@@ -184,13 +184,14 @@ meld out-1 out
 ## Pre-Deploy
 
 You use the [Rendered Manifests Pattern](https://github.com/guettli/kubenorm#rendered-manifests-pattern):
-your desired state is a tree of YAML files in `zz_rendered/`, and Argo CD
-applies it.
+your desired state is a tree of YAML files in `zz_rendered/`, and your
+favorite GitOps tool (Flux, Argo CD, Rancher Fleet, ...) applies it.
 
 Now you want to know: what will happen when these files get applied. You could
 use `kubectl diff -R -f zz_rendered`, but this requires permission to PATCH
-resources. In many setups only Argo CD has that permission. Additionally, it
-shows many differences that are not real differences (like Argo CD labels).
+resources. In many setups only the GitOps tool has that permission. Additionally, it
+shows many differences that are not real differences (like tracking labels of
+the GitOps tool).
 
 You can see a clean diff like this. Dump the current state of exactly the
 resources in `zz_rendered`, normalized with the same common config:
