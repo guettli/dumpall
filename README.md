@@ -218,7 +218,7 @@ different, especially if you modify `ignoreDifferences` of Argo CD.
 ## Related
 
 - [kubenorm](https://github.com/guettli/kubenorm) Normalize Kubernetes YAML files on disk (Rendered Manifests Pattern). The normalization engine of dumpall.
-- [check-conditions](https://github.com/guettli/check-conditions) Tiny tool to check all conditions of all resources in your Kubernetes cluster.
+- [konmon](https://github.com/guettli/konmon) Kubernetes Condition Monitor: watch all resources, keep a history in SQLite, alert via Alertmanager.
 - [korphan](https://github.com/guettli/korphan) Find orphaned Kubernetes resources — those managed by neither a controller nor a GitOps tool.
 - [Thomas WOL: Working out Loud](https://github.com/guettli/wol) Articles, projects, and insights spanning various topics in software development.
 
