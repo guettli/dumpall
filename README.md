@@ -205,8 +205,8 @@ dumpall --read-resource-names-from ./zz_rendered --ignore-config-use-common -o c
 Compare it with the desired state. `kubenorm diff` normalizes both sides again
 and pairs resources by identity, so the file layout of `zz_rendered` does not
 matter. Install kubenorm like dumpall
-(`mise use --pin github:guettli/kubenorm@latest`): the version that dumpall
-uses (see its `go.mod`) or a newer one with the same major version works:
+(`mise use --pin github:guettli/kubenorm@latest`), the version of dumpall's
+`go.mod` or a newer one with the same major version:
 
 ```bash
 kubenorm diff current-state ./zz_rendered
