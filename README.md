@@ -134,6 +134,7 @@ Available Commands:
   version                   Print the version
 
 Flags:
+      --clean-out-dir                   Remove out-dir before dumping (only if it contains nothing but *.yaml files)
       --comment string                  Additional comment line to add at the top of each output YAML file
   -m, --dump-managed-fields             Dump managed fields (disabled by default)
   -s, --dump-secrets                    Dump secrets (disabled by default)
@@ -148,7 +149,6 @@ Flags:
   -q, --quiet                           Quiet, suppress output
       --read-resource-names-from path   Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources from the api-server.
       --read-yaml-from path             Deprecated, use kubenorm norm. Read YAML manifests from a file or directory instead of connecting to the api-server.
-  -r, --remove-out-dir                  Remove out-dir before dumping (disabled by default)
       --secrets-as-stringdata           Write secret values as stringData (decoded from base64); requires --dump-secrets (-s)
       --skip-name-glob string           Skip resources where metadata.name matches this glob (e.g. 'foo-*' skips names starting with 'foo-')
   -O, --skip-owned                      Skip resources that have a controlling owner reference (e.g., Pods owned by a ReplicaSet) or that Kubernetes autogenerates from other resources (e.g., aggregated ClusterRoles)
