@@ -83,9 +83,6 @@ canonicalized like in `kubenorm norm` (`1000m` becomes `"1"`). Without the
 permission to list CRDs it warns and writes them as the api-server returns
 them.
 
-dumpall never overwrites a file: if two resources map to the same path
-(`a:b` and `a_b`, since `:` becomes `_`), the dump fails.
-
 To exclude entire namespaces from the dump — including the `Namespace` object **and** every resource inside — use the `excludeNamespaces` key of the config, or the `--exclude-namespaces` flag:
 
 ```terminal
