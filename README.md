@@ -33,7 +33,9 @@ mise use --pin github:guettli/dumpall@latest
 ```
 
 This writes the exact version to `mise.toml`; `mise upgrade --bump
-github:guettli/dumpall` moves to a newer release. Alternatives: download a
+github:guettli/dumpall` moves to a newer release. mise skips releases younger
+than 24 hours (`minimum_release_age`), so `@latest` can be one release behind
+for a day. Alternatives: download a
 binary from the [releases](https://github.com/guettli/dumpall/releases), or
 `go run github.com/guettli/dumpall@latest` (needs Go).
 
