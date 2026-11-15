@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -156,7 +157,7 @@ func buildRootCmd() *cobra.Command {
 	rootCmd := &cobra.Command{
 		Use:   toolNameForUsageOutput,
 		Short: "Dump all Kubernetes resources to YAML files",
-		Long: `Read resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.
+		Long: `Read resources from the api-server and dump each resource to a file.
 
 The normalization is done by kubenorm (https://github.com/guettli/kubenorm).
 For YAML files on disk (helm output, Rendered Manifests Pattern, CI checks)
@@ -182,6 +183,10 @@ use kubenorm directly.`,
 				}
 
 				opts.readYamlFrom = opts.fileName
+			}
+
+			if opts.readYamlFrom != "" {
+				warnDeprecated("--read-yaml-from", "kubenorm norm")
 			}
 
 			opts.readResourceNamesFrom = strings.TrimSpace(opts.readResourceNamesFrom)
@@ -216,7 +221,7 @@ use kubenorm directly.`,
 	rootCmd.Flags().StringVarP(&opts.nameRegex, "name-regex", "x", "", "Only dump resources where metadata.name matches this regex")
 	rootCmd.Flags().StringVar(&opts.skipNameGlob, "skip-name-glob", "", "Skip resources where metadata.name matches this glob (e.g. 'foo-*' skips names starting with 'foo-')")
 	rootCmd.Flags().StringVar(&opts.excludeNamespacesCSV, "exclude-namespaces", "", "Comma-separated list of namespace globs to fully exclude (e.g. 'foo-*,test-*'). Drops the Namespace object plus all resources inside; uses fieldSelector to skip those namespaces api-server-side")
-	rootCmd.Flags().Var((*pathValue)(&opts.readYamlFrom), "read-yaml-from", "Read YAML manifests from a file or directory instead of connecting to the api-server. Useful for normalizing existing YAML files for better diffing.")
+	rootCmd.Flags().Var((*pathValue)(&opts.readYamlFrom), "read-yaml-from", "Deprecated, use kubenorm norm. Read YAML manifests from a file or directory instead of connecting to the api-server.")
 	rootCmd.Flags().Var((*pathValue)(&opts.readResourceNamesFrom), "read-resource-names-from", "Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources from the api-server.")
 	rootCmd.Flags().StringVar(&opts.comment, "comment", "", "Additional comment line to add at the top of each output YAML file")
 	rootCmd.Flags().StringVarP(&opts.fileName, "file-name", "f", "", "Alias for --read-yaml-from (hidden)")
@@ -444,11 +449,15 @@ func buildDiffCmd() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			if d.readYamlFrom != "" {
+				warnDeprecated("diff --read-yaml-from", "kubenorm diff")
+			}
+
 			return runDiffCore(d, args[0])
 		},
 	}
 
-	cmd.Flags().StringVar(&d.readYamlFrom, "read-yaml-from", "", "Read YAML from file/dir (source A) instead of connecting to cluster")
+	cmd.Flags().StringVar(&d.readYamlFrom, "read-yaml-from", "", "Deprecated, use kubenorm diff. Read YAML from file/dir (source A) instead of connecting to cluster")
 	cmd.Flags().StringVarP(&d.namespacesCSV, "namespaces", "n", "", "Comma-separated list of namespaces to compare")
 	cmd.Flags().StringVar(&d.kindFilterCSV, "kind", "", "Comma-separated list of kind globs to compare (e.g. 'ConfigMap,Secret')")
 	cmd.Flags().StringVarP(&d.nameRegex, "name-regex", "x", "", "Only compare resources where metadata.name matches this regex")
@@ -584,11 +593,13 @@ func buildCheckNormalizedCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:          "check-normalized <yaml-file-or-dir>",
-		Short:        "Check whether a YAML file or directory is already normalized",
-		Long:         "Check whether a YAML file or directory is already normalized.\nExits 0 if already normalized, 1 if normalization would change it.",
+		Short:        "Deprecated, use kubenorm norm --check",
+		Long:         "Deprecated, use kubenorm norm --check (" + kubenormURL + ").\n\nCheck whether a YAML file or directory is already normalized.\nExits 0 if already normalized, 1 if normalization would change it.",
 		SilenceUsage: true,
 		Args:         cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
+			warnDeprecated("check-normalized", "kubenorm norm --check")
+
 			return runCheckNormalizedCore(c, args[0])
 		},
 	}
@@ -605,6 +616,18 @@ func buildCheckNormalizedCmd() *cobra.Command {
 	cmd.Flags().BoolVarP(&c.quiet, "quiet", "q", true, "Suppress progress output")
 
 	return cmd
+}
+
+const kubenormURL = "https://github.com/guettli/kubenorm"
+
+// deprecationOut receives deprecation warnings; tests replace it.
+var deprecationOut io.Writer = os.Stderr
+
+// warnDeprecated tells the user that a feature moved to kubenorm. It is
+// printed even with --quiet: the feature will be removed.
+func warnDeprecated(feature, replacement string) {
+	fmt.Fprintf(deprecationOut, "Warning: %s is deprecated and will be removed. Use %s (%s).\n",
+		feature, replacement, kubenormURL)
 }
 
 func runCheckNormalizedCore(c checkNormalizedOpts, inputPath string) error {
