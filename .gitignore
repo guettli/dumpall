@@ -5,3 +5,6 @@ dumpall
 .vscode
 .env
 tmp
+# Local Claude Code state (agent worktrees, personal settings)
+.claude/worktrees/
+.claude/settings.local.json
