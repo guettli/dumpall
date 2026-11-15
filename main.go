@@ -77,7 +77,7 @@ type options struct {
 	dumpSecrets           bool
 	secretsAsStringData   bool
 	dumpManagedFields     bool
-	removeOutdir          bool
+	cleanOutDir           bool
 	overwriteOutdir       bool
 	skipOwned             bool
 	ignoreConfigUseCommon bool
@@ -164,7 +164,7 @@ For YAML files on disk (helm output, Rendered Manifests Pattern, CI checks)
 use kubenorm directly.`,
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			opts.readYamlFrom = strings.TrimSpace(opts.readYamlFrom)
 
 			opts.dir = strings.TrimSpace(opts.dir)
@@ -196,8 +196,17 @@ use kubenorm directly.`,
 				return err
 			}
 
-			if opts.removeOutdir {
-				err := os.RemoveAll(opts.outputDir)
+			if cmd.Flags().Changed("remove-out-dir") {
+				fmt.Fprintln(deprecationOut, "Warning: --remove-out-dir (-r) is deprecated and will be removed. Use --clean-out-dir.")
+			}
+
+			if opts.cleanOutDir {
+				err := checkRemovable(opts.outputDir)
+				if err != nil {
+					return err
+				}
+
+				err = os.RemoveAll(opts.outputDir)
 				if err != nil {
 					return fmt.Errorf("failed to remove out-dir %s: %w", opts.outputDir, err)
 				}
@@ -212,7 +221,9 @@ use kubenorm directly.`,
 	rootCmd.Flags().BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
 	rootCmd.Flags().BoolVar(&opts.secretsAsStringData, "secrets-as-stringdata", false, "Write secret values as stringData (decoded from base64); requires --dump-secrets (-s)")
 	rootCmd.Flags().BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
-	rootCmd.Flags().BoolVarP(&opts.removeOutdir, "remove-out-dir", "r", false, "Remove out-dir before dumping (disabled by default)")
+	rootCmd.Flags().BoolVar(&opts.cleanOutDir, "clean-out-dir", false, "Remove out-dir before dumping (only if it contains nothing but *.yaml files)")
+	rootCmd.Flags().BoolVarP(&opts.cleanOutDir, "remove-out-dir", "r", false, "")
+	_ = rootCmd.Flags().MarkHidden("remove-out-dir")
 	rootCmd.Flags().BoolVarP(&opts.skipOwned, "skip-owned", "O", false, "Skip resources that have a controlling owner reference (e.g., Pods owned by a ReplicaSet) or that Kubernetes autogenerates from other resources (e.g., aggregated ClusterRoles)")
 	rootCmd.Flags().BoolVar(&opts.ignoreConfigUseCommon, "ignore-config-use-common", false, "Use the embedded common ignore config")
 	rootCmd.Flags().Var((*fileValue)(&opts.ignoreConfigFile), "ignore-config", "Path to a YAML file with ignore rules")
@@ -366,7 +377,7 @@ func (o *options) normOptions() *normalize.Options {
 func runDump(opts *options) error {
 	_, err := os.Stat(opts.outputDir)
 	if err == nil && !opts.overwriteOutdir {
-		return fmt.Errorf("output directory %q already exists. Use --remove-out-dir if you want to overwrite it", opts.outputDir)
+		return fmt.Errorf("output directory %q already exists. Use --clean-out-dir to replace it", opts.outputDir)
 	}
 
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -625,6 +636,28 @@ var deprecationOut io.Writer = os.Stderr
 
 // warnDeprecated tells the user that a feature moved to kubenorm. It is
 // printed even with --quiet: the feature will be removed.
+// checkRemovable makes sure that dir looks like a dump: only directories
+// and *.yaml files. A typo like "--clean-out-dir -o ~" must not delete a
+// home directory.
+func checkRemovable(dir string) error {
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+
+		if d.IsDir() || (d.Type().IsRegular() && filepath.Ext(path) == ".yaml") {
+			return nil
+		}
+
+		return fmt.Errorf("refusing to remove it, %s is not a YAML file written by dumpall", path)
+	})
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+
+	return fmt.Errorf("--clean-out-dir %s: %w", dir, err)
+}
+
 func warnDeprecated(feature, replacement string) {
 	fmt.Fprintf(deprecationOut, "Warning: %s is deprecated and will be removed. Use %s (%s).\n",
 		feature, replacement, kubenormURL)

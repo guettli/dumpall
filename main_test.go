@@ -1065,3 +1065,39 @@ func TestCheckNormalized_WarnsDeprecated(t *testing.T) {
 		t.Fatalf("got %q, want %q", out.String(), want)
 	}
 }
+
+func TestCheckRemovable(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	err := os.MkdirAll(filepath.Join(dir, "ns", "ConfigMap"), 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "ns", "ConfigMap", "a.yaml"), []byte("kind: ConfigMap\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = checkRemovable(dir)
+	if err != nil {
+		t.Fatalf("dump dir: %v", err)
+	}
+
+	err = checkRemovable(filepath.Join(dir, "missing"))
+	if err != nil {
+		t.Fatalf("missing dir: %v", err)
+	}
+
+	err = os.WriteFile(filepath.Join(dir, "notes.txt"), []byte("keep me\n"), 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = checkRemovable(dir)
+	if err == nil || !strings.Contains(err.Error(), "refusing to remove") {
+		t.Fatalf("expected refusal, got %v", err)
+	}
+}
