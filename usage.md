@@ -1,6 +1,6 @@
 # Dumpall Manual
 
-Read resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.
+Read resources from the api-server and dump each resource to a file.
 
 The normalization is done by kubenorm (https://github.com/guettli/kubenorm).
 For YAML files on disk (helm output, Rendered Manifests Pattern, CI checks)
@@ -29,6 +29,8 @@ dumpall [command] [global flags] [command flags]
 # Commands
 
 ## `dumpall check-normalized`
+
+Deprecated, use kubenorm norm --check (https://github.com/guettli/kubenorm).
 
 Check whether a YAML file or directory is already normalized.
 Exits 0 if already normalized, 1 if normalization would change it.
@@ -226,7 +228,7 @@ dumpall diff <local-dump-dir> [flags]
   -n, --namespaces string           Comma-separated list of namespaces to compare
       --no-common-ignore-config     Disable the embedded common ignore config (compare raw resources)
   -q, --quiet                       Suppress progress output (default true)
-      --read-yaml-from string       Read YAML from file/dir (source A) instead of connecting to cluster
+      --read-yaml-from string       Deprecated, use kubenorm diff. Read YAML from file/dir (source A) instead of connecting to cluster
       --skip-name-glob string       Skip resources where metadata.name matches this glob
   -O, --skip-owned                  Skip resources with a controlling owner reference
 ```

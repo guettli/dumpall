@@ -71,10 +71,9 @@ skipped. Resources with non-controlling owner references are still dumped.
 - The `default` ServiceAccount that the service-account controller creates in every namespace.
 - The `kube-root-ca.crt` ConfigMap that the root-ca-cert-publisher creates in every namespace.
 
-`--read-yaml-from` reads a YAML file or directory instead of connecting to the
-api-server and processes it like `kubenorm norm` (CRDs in the input are known,
-SOPS-encrypted documents are dropped). `dumpall check-normalized` checks
-files. Both still work, but for files on disk kubenorm is the better tool:
+Deprecated, will be removed: `--read-yaml-from` (use `kubenorm norm`),
+`diff --read-yaml-from` (use `kubenorm diff`) and `check-normalized` (use
+`kubenorm norm --check`). They still work and print a warning on stderr.
 
 ```terminal
 # instead of: dumpall --read-yaml-from ./manifests --ignore-config-use-common -o ./normalized
@@ -112,7 +111,7 @@ Patterns are globs. Excluded namespaces are filtered by the api-server (field se
 
 <!-- usage:start -->
 ```text
-Read resources from the api-server (or a YAML file/directory via --read-yaml-from) and dump each resource to a file.
+Read resources from the api-server and dump each resource to a file.
 
 The normalization is done by kubenorm (https://github.com/guettli/kubenorm).
 For YAML files on disk (helm output, Rendered Manifests Pattern, CI checks)
@@ -123,7 +122,7 @@ Usage:
   dumpall [command]
 
 Available Commands:
-  check-normalized          Check whether a YAML file or directory is already normalized
+  check-normalized          Deprecated, use kubenorm norm --check
   completion                Generate the autocompletion script for the specified shell
   diff                      Diff the current cluster state against a local dump
   gendocs                   Generate usage.md from the command tree
@@ -146,7 +145,7 @@ Flags:
   -o, --out-dir dir                     Output directory (must not exist) (default out)
   -q, --quiet                           Quiet, suppress output
       --read-resource-names-from path   Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources from the api-server.
-      --read-yaml-from path             Read YAML manifests from a file or directory instead of connecting to the api-server. Useful for normalizing existing YAML files for better diffing.
+      --read-yaml-from path             Deprecated, use kubenorm norm. Read YAML manifests from a file or directory instead of connecting to the api-server.
   -r, --remove-out-dir                  Remove out-dir before dumping (disabled by default)
       --secrets-as-stringdata           Write secret values as stringData (decoded from base64); requires --dump-secrets (-s)
       --skip-name-glob string           Skip resources where metadata.name matches this glob (e.g. 'foo-*' skips names starting with 'foo-')

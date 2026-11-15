@@ -1045,3 +1045,23 @@ func TestReadYamlFromDir_AppliesIgnoreConfigFile(t *testing.T) {
 		t.Fatalf("unexpected output:\n%s", data)
 	}
 }
+
+// Not parallel: replaces deprecationOut.
+func TestCheckNormalized_WarnsDeprecated(t *testing.T) {
+	var out bytes.Buffer
+
+	deprecationOut = &out
+
+	t.Cleanup(func() { deprecationOut = os.Stderr })
+
+	cmd := buildCheckNormalizedCmd()
+	cmd.SetArgs([]string{"scripts/testdata/files"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	_ = cmd.Execute()
+
+	want := "Warning: check-normalized is deprecated and will be removed. Use kubenorm norm --check (https://github.com/guettli/kubenorm).\n"
+	if out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}
