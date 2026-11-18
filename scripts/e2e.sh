@@ -101,6 +101,26 @@ dumpall -o "$work/kind" --kind ConfigMap --namespaces dumpall-e2e
 other=$(find "$work/kind" -type f ! -name _dumpall_meta.yaml ! -path '*/ConfigMap/*')
 [ -z "$other" ] || fail "--kind ConfigMap dumped: $other"
 
+echo "--- hand-written EndpointSlices are dumped, generated ones not"
+for name in manual generated; do
+	kubectl apply -f - >/dev/null <<-YAML
+		apiVersion: discovery.k8s.io/v1
+		kind: EndpointSlice
+		metadata:
+		  name: $name
+		  namespace: dumpall-e2e
+		  labels:
+		    kubernetes.io/service-name: $name
+		    $([ $name = generated ] && echo "endpointslice.kubernetes.io/managed-by: endpointslice-controller.k8s.io")
+		addressType: IPv4
+		endpoints:
+		- addresses: [10.0.0.10]
+	YAML
+done
+dumpall -o "$work/slices" --namespaces dumpall-e2e --kind EndpointSlice
+[ -f "$work/slices/dumpall-e2e/discovery.k8s.io_EndpointSlice/manual.yaml" ] || fail "hand-written EndpointSlice missing"
+[ ! -e "$work/slices/dumpall-e2e/discovery.k8s.io_EndpointSlice/generated.yaml" ] || fail "generated EndpointSlice dumped"
+
 echo "--- quantities in custom resources are canonical (CRDs of the cluster)"
 dumpall -o "$work/cr" --namespaces dumpall-e2e --kind Widget
 grep -q 'size: 2Gi' "$work/cr/dumpall-e2e/example.com_Widget/w.yaml" || fail "CR quantity from the api-server not canonical"
