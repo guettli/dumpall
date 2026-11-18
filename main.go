@@ -58,9 +58,16 @@ var toSkip = map[string][]string{
 		"selfsubjectrulesreviews", "localsubjectaccessreviews",
 	},
 	"coordination.k8s.io/v1": {"leases"},
-	"discovery.k8s.io/v1":    {"endpointslices"},
 	"events.k8s.io/v1":       {"events"},
 	"v1":                     {"events", "bindings", "componentstatuses", "endpoints"},
+}
+
+// labelSelectors restricts the listing of a resource type. The endpointslice
+// controllers generate EndpointSlices from Services and Endpoints (runtime
+// state); hand-written ones, for a Service without selector, are desired state.
+var labelSelectors = map[string]string{
+	"endpointslices": "endpointslice.kubernetes.io/managed-by notin " +
+		"(endpointslice-controller.k8s.io,endpointslicemirroring-controller.k8s.io)",
 }
 
 type dumpMeta struct {
@@ -1187,7 +1194,7 @@ func resolveExcludeNamespaceFieldSelector(client dynamic.Interface, opts *option
 }
 
 func enqueueGVRItems(client dynamic.Interface, job gvrListJob, opts *options, writeJobs chan<- resourceWriteJob) error {
-	listOpts := meta.ListOptions{}
+	listOpts := meta.ListOptions{LabelSelector: labelSelectors[job.gvr.Resource]}
 	if job.isNamespaced && opts.excludeFieldSelector != "" {
 		listOpts.FieldSelector = opts.excludeFieldSelector
 	}
@@ -1197,7 +1204,8 @@ func enqueueGVRItems(client dynamic.Interface, job gvrListJob, opts *options, wr
 		// Some resources (podcertificaterequests) do not support the
 		// metadata.namespace field selector. shouldProcessItem drops the
 		// excluded namespaces client-side.
-		list, err = client.Resource(job.gvr).List(context.TODO(), meta.ListOptions{})
+		listOpts.FieldSelector = ""
+		list, err = client.Resource(job.gvr).List(context.TODO(), listOpts)
 	}
 
 	if err != nil {

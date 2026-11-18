@@ -73,6 +73,9 @@ skipped. Resources with non-controlling owner references are still dumped.
 - The `default` ServiceAccount that the service-account controller creates in every namespace.
 - The `kube-root-ca.crt` ConfigMap that the root-ca-cert-publisher creates in every namespace.
 
+EndpointSlices that the endpointslice controllers generate from Services are never dumped;
+hand-written ones (for a Service without selector) are.
+
 Deprecated, will be removed: `--read-yaml-from` (use `kubenorm norm`),
 `diff --read-yaml-from` (use `kubenorm diff`) and `check-normalized` (use
 `kubenorm norm --check`). They still work and print a warning on stderr.
