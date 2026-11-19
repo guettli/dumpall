@@ -1,0 +1,37 @@
+# Betterleaks config. Used by the pre-commit hook (see .pre-commit-config.yaml).
+# Scan everything: betterleaks dir . --config .betterleaks.toml
+#
+# A top-level "filter" REPLACES the global filter of the built-in config.
+# So the first part below is a copy of the default global filter of
+# betterleaks v1.10.1 (betterleaks config show). Re-sync it when upgrading.
+# The second part holds the excludes for this repo.
+
+filter = '''
+// --- default global filter (betterleaks v1.10.1) ---
+(matchesAny(finding["secret"], [
+  `(?i)^true|false|null$`,
+  `^(?i:a+|b+|c+|d+|e+|f+|g+|h+|i+|j+|k+|l+|m+|n+|o+|p+|q+|r+|s+|t+|u+|v+|w+|x+|y+|z+|\*+|\.+)$`,
+  `^\$(?:\d+|{\d+})$`,
+  `^\$(?:[A-Z_]+|[a-z_]+)$`,
+  `^\${(?:[A-Z_]+|[a-z_]+)}$`,
+  `^\{\{[ \t]*[\w ().|]+[ \t]*}}$`,
+  `^\$\{\{[ \t]*(?:(?:env|github|secrets|vars)(?:\.[A-Za-z]\w+)+[\w "'&./=|]*)[ \t]*}}$`,
+  `^%(?:[A-Z_]+|[a-z_]+)%$`,
+  `^%[+\-# 0]?[bcdeEfFgGoOpqstTUvxX]$`,
+  `^\{\d{0,2}}$`,
+  `^@(?:[A-Z_]+|[a-z_]+)@$`,
+  `^/Users/(?i)[a-z0-9]+/[\w .-/]+$`,
+  `^/(?:bin|etc|home|opt|tmp|usr|var)/[\w ./-]+$`
+]) || containsAny(finding["secret"], [
+  "abcdefghijklmnopqrstuvwxyz",
+  "014df517-39d1-4453-b7b3-9930c563627c"
+]))
+
+|| (
+  // Go tests use fake passwords.
+  (finding["rule_id"] startsWith "generic-" && filter.matchesAny(attributes["path"], [`_test\.go$`]))
+)
+'''
+
+[extend]
+useDefault = true

@@ -18,10 +18,11 @@ repos:
     types: [go]
     exclude: ^vendor/
 
-- repo: https://github.com/gitleaks/gitleaks
-  rev: v8.24.0
+- repo: https://github.com/betterleaks/betterleaks
+  rev: v1.10.1
   hooks:
-    - id: gitleaks
+    - id: betterleaks
+      args: [--config, .betterleaks.toml]
 
 - repo: https://github.com/shellcheck-py/shellcheck-py
   rev: v0.11.0.1
