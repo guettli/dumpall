@@ -1,4 +1,4 @@
-# Betterleaks config, used by the pre-commit hook (see .pre-commit-config.yaml).
+# Betterleaks config, used by the pre-commit hook (see prek.toml).
 # Scan all files: betterleaks dir . --config .betterleaks.toml
 #
 # Inherits the built-in rules and filters. The [[allowlists]] below are added
