@@ -16,7 +16,8 @@
           buildInputs = with pkgs; [
             shellcheck
             go
-            pre-commit
+            prek
+            mise
           ];
         };
       }

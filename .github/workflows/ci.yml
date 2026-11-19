@@ -18,16 +18,12 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.x'
+      # Installs prek and betterleaks from mise.toml (same versions as locally).
+      - uses: jdx/mise-action@v5
 
-      - name: Install pre-commit
-        run: pip install pre-commit
-
-      - name: Run pre-commit
+      - name: Run prek
         # Fails if a hook changed files (go mod tidy, usage.md, README).
-        run: pre-commit run --all-files --show-diff-on-failure
+        run: prek run --all-files --show-diff-on-failure
 
       - name: Test with race detector
         run: go test -race ./...
