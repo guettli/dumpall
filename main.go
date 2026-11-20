@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	yaml "sigs.k8s.io/yaml/goyaml.v3"
 )
@@ -105,7 +106,11 @@ type options struct {
 	// --skip-name-glob and --exclude-namespaces (see finalizeOpts).
 	normCfg              *normalize.Config
 	excludeFieldSelector string
-	resourceNameFilter   map[resourceNameKey]struct{}
+	// announceContext prints the kubeconfig context even with quiet set
+	// (diff is quiet by default but must not compare the wrong cluster
+	// silently).
+	announceContext    bool
+	resourceNameFilter map[resourceNameKey]struct{}
 }
 
 type resourceNameKey struct {
@@ -247,6 +252,9 @@ use kubenorm directly.`,
 	_ = rootCmd.Flags().MarkHidden("file-name")
 	_ = rootCmd.Flags().MarkHidden("dir")
 
+	rootCmd.PersistentFlags().StringVar(&kubeconfigFlags.path, "kubeconfig", "", "Path to the kubeconfig file (default: $KUBECONFIG or ~/.kube/config)")
+	rootCmd.PersistentFlags().StringVar(&kubeconfigFlags.context, "context", "", "The kubeconfig context to use (default: current-context)")
+
 	rootCmd.AddCommand(buildDiffCmd())
 	rootCmd.AddCommand(buildCheckNormalizedCmd())
 	rootCmd.AddCommand(buildTopChurnCmd())
@@ -381,6 +389,53 @@ func (o *options) normOptions() *normalize.Options {
 	}
 }
 
+// kubeconfigFlags holds the global --kubeconfig and --context flags. They
+// apply to every command that reads from the api-server.
+var kubeconfigFlags struct {
+	path    string
+	context string
+}
+
+// restConfig builds the client config from the kubeconfig (--kubeconfig,
+// $KUBECONFIG or ~/.kube/config) and the selected context (--context or the
+// current-context). If announce is set, it prints the context it uses to
+// stderr, so reading the wrong cluster does not happen silently.
+func restConfig(announce bool) (*rest.Config, error) {
+	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+	loadingRules.ExplicitPath = kubeconfigFlags.path
+	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: kubeconfigFlags.context}
+	kubeconfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+
+	config, err := kubeconfig.ClientConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get client config: %w", err)
+	}
+
+	if announce {
+		announceContext(kubeconfig, config.Host)
+	}
+
+	return config, nil
+}
+
+// announceContext prints the context and api-server dumpall reads from.
+func announceContext(kubeconfig clientcmd.ClientConfig, host string) {
+	contextName := kubeconfigFlags.context
+	if contextName == "" {
+		raw, err := kubeconfig.RawConfig()
+		if err == nil {
+			contextName = raw.CurrentContext
+		}
+	}
+
+	if contextName == "" {
+		fmt.Fprintf(os.Stderr, "Using api-server %s (no kubeconfig context)\n", host)
+		return
+	}
+
+	fmt.Fprintf(os.Stderr, "Using context %q (api-server %s)\n", contextName, host)
+}
+
 func runDump(opts *options) error {
 	_, err := os.Stat(opts.outputDir)
 	if err == nil && !opts.overwriteOutdir {
@@ -404,13 +459,9 @@ func runDump(opts *options) error {
 		return readYAMLFrom(opts.readYamlFrom, opts)
 	}
 
-	loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
-	configOverrides := &clientcmd.ConfigOverrides{}
-	kubeconfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
-
-	config, err := kubeconfig.ClientConfig()
+	config, err := restConfig(!opts.quiet || opts.announceContext)
 	if err != nil {
-		return fmt.Errorf("failed to get client config: %w", err)
+		return err
 	}
 
 	// Disable client-side throttling. Modern api-servers can handle this,
@@ -563,6 +614,7 @@ func runDiffCore(d diffOpts, localDumpDir string) error {
 			ignoreConfigUseCommon: !d.noCommonIgnoreConfig,
 			quiet:                 d.quiet,
 			overwriteOutdir:       true,
+			announceContext:       true,
 		}
 	}
 

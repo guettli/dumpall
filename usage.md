@@ -10,6 +10,13 @@ use kubenorm directly.
 dumpall [command] [global flags] [command flags]
 ```
 
+### Global Flags
+
+```text
+      --context string      The kubeconfig context to use (default: current-context)
+      --kubeconfig string   Path to the kubeconfig file (default: $KUBECONFIG or ~/.kube/config)
+```
+
 ### Commands
 - [dumpall check-normalized](#dumpall-check-normalized)
 - [dumpall completion](#dumpall-completion)

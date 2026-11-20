@@ -44,11 +44,19 @@ Dump the cluster of your current kubeconfig context:
 ```terminal
 dumpall
 
+Using context "prod" (api-server https://10.0.0.1:6443)
+
 Written: out/cert-manager/Service/cert-manager.yaml
 Written: out/cert-manager/Service/cert-manager-webhook.yaml
 Written: out/default/Service/kubernetes.yaml
 Written: out/_cluster/Namespace/cert-manager.yaml    <-- cluster-scoped resources use the directory "_cluster"
 ...
+```
+
+Pick another cluster with `--context` (and `--kubeconfig`), like kubectl:
+
+```terminal
+dumpall --context staging -o out-staging
 ```
 
 ## Options
@@ -139,6 +147,7 @@ Available Commands:
 Flags:
       --clean-out-dir                   Remove out-dir before dumping (only if it contains nothing but *.yaml files)
       --comment string                  Additional comment line to add at the top of each output YAML file
+      --context string                  The kubeconfig context to use (default: current-context)
   -m, --dump-managed-fields             Dump managed fields (disabled by default)
   -s, --dump-secrets                    Dump secrets (disabled by default)
       --exclude-namespaces string       Comma-separated list of namespace globs to fully exclude (e.g. 'foo-*,test-*'). Drops the Namespace object plus all resources inside; uses fieldSelector to skip those namespaces api-server-side
@@ -146,6 +155,7 @@ Flags:
       --ignore-config file              Path to a YAML file with ignore rules
       --ignore-config-use-common        Use the embedded common ignore config
       --kind string                     Comma-separated list of kind globs to dump (e.g. 'ConfigMap,Secret,Cluster*')
+      --kubeconfig string               Path to the kubeconfig file (default: $KUBECONFIG or ~/.kube/config)
   -x, --name-regex string               Only dump resources where metadata.name matches this regex
   -n, --namespaces string               Comma-separated list of namespaces to dump
   -o, --out-dir dir                     Output directory (must not exist) (default out)
