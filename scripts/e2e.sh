@@ -101,6 +101,33 @@ dumpall -o "$work/kind" --kind ConfigMap --namespaces dumpall-e2e
 other=$(find "$work/kind" -type f ! -name _dumpall_meta.yaml ! -path '*/ConfigMap/*')
 [ -z "$other" ] || fail "--kind ConfigMap dumped: $other"
 
+echo "--- --kubeconfig and --context"
+# current-context points to a dead server, so only --context reaches the cluster.
+cat >"$work/multi-kubeconfig" <<-YAML
+	apiVersion: v1
+	kind: Config
+	clusters:
+	- {name: e2e, cluster: {server: "https://127.0.0.1:26443", insecure-skip-tls-verify: true}}
+	- {name: dead, cluster: {server: "https://127.0.0.1:1"}}
+	users: [{name: admin, user: {token: e2e-token}}]
+	contexts:
+	- {name: e2e, context: {cluster: e2e, user: admin}}
+	- {name: dead, context: {cluster: dead, user: admin}}
+	current-context: dead
+YAML
+"$work/dumpall" --kubeconfig "$work/multi-kubeconfig" --context e2e -o "$work/context" \
+	--kind ConfigMap --namespaces dumpall-e2e >/dev/null 2>"$work/context.log" || fail "--context e2e failed"
+grep -q 'Using context "e2e"' "$work/context.log" || { cat "$work/context.log"; fail "context not reported"; }
+[ -f "$work/context/dumpall-e2e/ConfigMap/app-config.yaml" ] || fail "--context dumped nothing"
+! dumpall --kubeconfig "$work/multi-kubeconfig" -o "$work/dead" 2>"$work/dead.log" || fail "current-context dead was not used"
+grep -q '127.0.0.1:1' "$work/dead.log" || { cat "$work/dead.log"; fail "dead: unexpected error"; }
+! dumpall --context no-such-context -o "$work/nosuch" 2>"$work/nosuch.log" || fail "unknown --context accepted"
+grep -q 'context "no-such-context" does not exist' "$work/nosuch.log" || { cat "$work/nosuch.log"; fail "nosuch: unexpected error"; }
+echo "--- diff announces the context although quiet"
+dumpall --kubeconfig "$work/multi-kubeconfig" --context e2e diff --kind ConfigMap -n dumpall-e2e "$work/context" \
+	>/dev/null 2>"$work/diffctx.log" || true
+grep -q 'Using context "e2e"' "$work/diffctx.log" || { cat "$work/diffctx.log"; fail "diff did not announce the context"; }
+
 echo "--- hand-written EndpointSlices are dumped, generated ones not"
 for name in manual generated; do
 	kubectl apply -f - >/dev/null <<-YAML
