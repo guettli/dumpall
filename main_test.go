@@ -1101,3 +1101,22 @@ func TestCheckRemovable(t *testing.T) {
 		t.Fatalf("expected refusal, got %v", err)
 	}
 }
+
+func TestListable(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		verbs []string
+		want  bool
+	}{
+		{verbs: []string{"create"}, want: false},
+		{verbs: []string{"get", "create"}, want: false},
+		{verbs: []string{"get", "list", "watch"}, want: true},
+		{verbs: nil, want: true},
+	} {
+		got := listable(meta.APIResource{Name: "x", Verbs: tc.verbs})
+		if got != tc.want {
+			t.Errorf("listable(%v) = %v, want %v", tc.verbs, got, tc.want)
+		}
+	}
+}

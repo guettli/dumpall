@@ -50,17 +50,10 @@ const (
 )
 
 var toSkip = map[string][]string{
-	appsV1: {"replicasets"},
-	"authentication.k8s.io/v1": {
-		"selfsubjectreviews", "tokenreviews",
-	},
-	"authorization.k8s.io/v1": {
-		"selfsubjectaccessreviews", "subjectaccessreviews",
-		"selfsubjectrulesreviews", "localsubjectaccessreviews",
-	},
+	appsV1:                   {"replicasets"},
 	"coordination.k8s.io/v1": {"leases"},
 	"events.k8s.io/v1":       {"events"},
-	"v1":                     {"events", "bindings", "componentstatuses", "endpoints"},
+	"v1":                     {"events", "componentstatuses", "endpoints"},
 }
 
 // labelSelectors restricts the listing of a resource type. The endpointslice
@@ -1065,13 +1058,13 @@ func validateKindFilterMatchesResources(kindFilter []string, resourceList []*met
 
 	for _, apiGroup := range resourceList {
 		for _, resource := range apiGroup.APIResources {
-			if matchesAnyGlob(kindFilter, resource.Kind) {
+			if listable(resource) && matchesAnyGlob(kindFilter, resource.Kind) {
 				return nil
 			}
 		}
 	}
 
-	return fmt.Errorf("--kind: no resource types found matching: %s (use `kubectl api-resources` to list available kinds)", strings.Join(kindFilter, ", "))
+	return fmt.Errorf("--kind: no listable resource types found matching: %s (use `kubectl api-resources` to list available kinds)", strings.Join(kindFilter, ", "))
 }
 
 var crdGVR = schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: "v1", Resource: "customresourcedefinitions"}
@@ -1101,6 +1094,14 @@ func loadCRDs(client dynamic.Interface, opts *options) error {
 	opts.norm = opts.normOptions().WithCRDs(crds)
 
 	return nil
+}
+
+// listable reports whether the api-server can list the resource. Some
+// resources only support create (e.g. the ChallengePayload of a cert-manager
+// DNS01 webhook, TokenReview); listing them fails on every dump. Discovery
+// without verbs is listed anyway.
+func listable(resource meta.APIResource) bool {
+	return len(resource.Verbs) == 0 || slices.Contains(resource.Verbs, "list")
 }
 
 func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourceList, opts *options) error {
@@ -1136,6 +1137,10 @@ func readFromAPIServer(client dynamic.Interface, resourceList []*meta.APIResourc
 		})
 
 		for _, resource := range apiGroup.APIResources {
+			if !listable(resource) {
+				continue
+			}
+
 			skipSlice := toSkip[apiGroup.GroupVersion]
 			if slices.Contains(skipSlice, resource.Name) {
 				continue
