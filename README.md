@@ -69,6 +69,10 @@ data, or control characters other than newline, tab and carriage return) stay
 base64-encoded in `data`. Use `--secrets-as-stringdata=false` to keep all
 values base64-encoded in `data`, like `kubectl get -o yaml`.
 
+Dumps made with `--dump-secrets` contain plaintext secrets (base64 is an
+encoding, not protection). Don't commit them unencrypted; use SOPS, Sealed
+Secrets or External Secrets for secrets in Git.
+
 To dump only specific namespaces, use `--namespaces` (or `-n`) with a comma-separated list, for example `--namespaces kube-system,default`.
 
 To dump only resources whose `metadata.name` matches a regex, use `--name-regex` (or `-x`), for example `--name-regex '^kube-apiserver-.*'`.
