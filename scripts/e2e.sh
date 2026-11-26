@@ -80,9 +80,14 @@ dumpall -o "$work/default"
 [ ! -e "$work/default/dumpall-e2e/Secret" ] || fail "secrets dumped without --dump-secrets"
 [ -f "$work/default/dumpall-e2e/ConfigMap/app-config.yaml" ] || fail "ConfigMap missing"
 
-echo "--- --dump-secrets"
+echo "--- --dump-secrets writes stringData"
 dumpall -o "$work/raw" --dump-secrets
-grep -q "password: $secret_b64" "$work/raw/dumpall-e2e/Secret/e2e-secret.yaml" || fail "secret value missing"
+grep -q "password: s3cret" "$work/raw/dumpall-e2e/Secret/e2e-secret.yaml" || fail "secret value missing in stringData"
+! grep -q "$secret_b64" "$work/raw/dumpall-e2e/Secret/e2e-secret.yaml" || fail "secret value still base64-encoded"
+
+echo "--- --dump-secrets --secrets-as-stringdata=false"
+dumpall -o "$work/raw-b64" --dump-secrets --secrets-as-stringdata=false
+grep -q "password: $secret_b64" "$work/raw-b64/dumpall-e2e/Secret/e2e-secret.yaml" || fail "base64 secret value missing"
 
 echo "--- --namespaces and --name-regex"
 dumpall -o "$work/filtered" --namespaces dumpall-e2e --name-regex '^app-config$'

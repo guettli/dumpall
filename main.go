@@ -196,6 +196,10 @@ use kubenorm directly.`,
 
 			opts.readResourceNamesFrom = strings.TrimSpace(opts.readResourceNamesFrom)
 
+			if cmd.Flags().Changed("secrets-as-stringdata") && opts.secretsAsStringData && !opts.dumpSecrets {
+				return errors.New("--secrets-as-stringdata requires --dump-secrets (-s)")
+			}
+
 			err := finalizeOpts(opts)
 			if err != nil {
 				return err
@@ -224,7 +228,7 @@ use kubenorm directly.`,
 	rootCmd.Flags().VarP((*dirValue)(&opts.outputDir), "out-dir", "o", "Output directory (must not exist)")
 	rootCmd.Flags().BoolVarP(&opts.quiet, "quiet", "q", false, "Quiet, suppress output")
 	rootCmd.Flags().BoolVarP(&opts.dumpSecrets, "dump-secrets", "s", false, "Dump secrets (disabled by default)")
-	rootCmd.Flags().BoolVar(&opts.secretsAsStringData, "secrets-as-stringdata", false, "Write secret values as stringData (decoded from base64); requires --dump-secrets (-s)")
+	rootCmd.Flags().BoolVar(&opts.secretsAsStringData, "secrets-as-stringdata", true, "With --dump-secrets (-s): write printable secret values as stringData (decoded from base64), so they are easy to read and edit; binary values stay in data. Use --secrets-as-stringdata=false to keep everything base64-encoded in data")
 	rootCmd.Flags().BoolVarP(&opts.dumpManagedFields, "dump-managed-fields", "m", false, "Dump managed fields (disabled by default)")
 	rootCmd.Flags().BoolVar(&opts.cleanOutDir, "clean-out-dir", false, "Remove out-dir before dumping (only if it contains nothing but *.yaml files)")
 	rootCmd.Flags().BoolVarP(&opts.cleanOutDir, "remove-out-dir", "r", false, "")
@@ -317,10 +321,6 @@ func buildGendocsCmd() *cobra.Command {
 }
 
 func finalizeOpts(opts *options) error {
-	if opts.secretsAsStringData && !opts.dumpSecrets {
-		return fmt.Errorf("--secrets-as-stringdata requires --dump-secrets (-s)")
-	}
-
 	namespaceFilter, err := normalize.ParseNamespacesCSV(opts.namespacesCSV)
 	if err != nil {
 		return fmt.Errorf("parsing --namespaces: %w", err)
@@ -378,7 +378,7 @@ func (o *options) normOptions() *normalize.Options {
 		SkipOwned:           o.skipOwned,
 		KeepManagedFields:   o.dumpManagedFields,
 		RedactSecrets:       !o.dumpSecrets,
-		SecretsAsStringData: o.secretsAsStringData,
+		SecretsAsStringData: o.dumpSecrets && o.secretsAsStringData,
 	}
 }
 
@@ -603,6 +603,7 @@ func runDiffCore(d diffOpts, localDumpDir string) error {
 			excludeNamespacesCSV:  d.excludeNamespacesCSV,
 			ignoreConfigFile:      d.ignoreConfigFile,
 			dumpSecrets:           d.dumpSecrets,
+			secretsAsStringData:   true,
 			skipOwned:             d.skipOwned,
 			ignoreConfigUseCommon: !d.noCommonIgnoreConfig,
 			quiet:                 d.quiet,

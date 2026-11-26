@@ -158,21 +158,53 @@ func TestWriteYAML_SecretsAsStringData(t *testing.T) {
 	}
 }
 
-func TestFinalizeOpts_SecretsAsStringDataRequiresDumpSecrets(t *testing.T) {
+func TestRootCmd_SecretsAsStringDataRequiresDumpSecrets(t *testing.T) {
 	t.Parallel()
 
-	opts := &options{
-		secretsAsStringData: true,
-		dumpSecrets:         false,
-	}
+	cmd := buildRootCmd()
+	cmd.SetArgs([]string{"--secrets-as-stringdata"})
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
 
-	err := finalizeOpts(opts)
+	err := cmd.Execute()
 	if err == nil {
 		t.Fatal("expected error when --secrets-as-stringdata is set without --dump-secrets")
 	}
 
 	if !strings.Contains(err.Error(), "--dump-secrets") {
 		t.Fatalf("expected error to mention --dump-secrets, got: %v", err)
+	}
+}
+
+func TestRootCmd_SecretsAsStringDataIsDefault(t *testing.T) {
+	t.Parallel()
+
+	flag := buildRootCmd().Flags().Lookup("secrets-as-stringdata")
+	if flag == nil || flag.DefValue != "true" {
+		t.Fatalf("--secrets-as-stringdata must default to true, got %+v", flag)
+	}
+}
+
+func TestNormOptions_SecretsAsStringDataOnlyWithDumpSecrets(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		dumpSecrets, asStringData, want bool
+	}{
+		{dumpSecrets: true, asStringData: true, want: true},
+		{dumpSecrets: true, asStringData: false, want: false},
+		{dumpSecrets: false, asStringData: true, want: false},
+	} {
+		opts := &options{dumpSecrets: tc.dumpSecrets, secretsAsStringData: tc.asStringData}
+
+		got := opts.normOptions()
+		if got.SecretsAsStringData != tc.want {
+			t.Errorf("%+v: SecretsAsStringData = %v, want %v", tc, got.SecretsAsStringData, tc.want)
+		}
+
+		if got.RedactSecrets && got.SecretsAsStringData {
+			t.Errorf("%+v: RedactSecrets and SecretsAsStringData are mutually exclusive", tc)
+		}
 	}
 }
 
@@ -811,6 +843,39 @@ data:
 
 	if !errors.Is(err, errDiffsFound) {
 		t.Fatalf("expected errDiffsFound, got: %v", err)
+	}
+}
+
+func TestRunDiff_SecretDataEqualsStringData(t *testing.T) {
+	writeSecret := func(dir, fields string) {
+		t.Helper()
+
+		content := "apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\n  namespace: default\n" + fields
+
+		err := os.WriteFile(filepath.Join(dir, "secret.yaml"), []byte(content), 0o600)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// As the api-server returns it, and as dumpall writes it by default.
+	dirData := t.TempDir()
+	writeSecret(dirData, "data:\n  password: czNjcmV0\n  bin: /+4A\n")
+
+	dirStringData := t.TempDir()
+	writeSecret(dirStringData, "stringData:\n  password: s3cret\ndata:\n  bin: /+4A\n")
+
+	err := runDiff([]string{"--read-yaml-from", dirData, dirStringData, "--dump-secrets"})
+	if err != nil {
+		t.Fatalf("data and stringData with the same values must not differ: %v", err)
+	}
+
+	dirChanged := t.TempDir()
+	writeSecret(dirChanged, "stringData:\n  password: changed\ndata:\n  bin: /+4A\n")
+
+	err = runDiff([]string{"--read-yaml-from", dirData, dirChanged, "--dump-secrets"})
+	if !errors.Is(err, errDiffsFound) {
+		t.Fatalf("expected errDiffsFound for a changed value, got: %v", err)
 	}
 }
 

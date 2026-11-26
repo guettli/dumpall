@@ -62,6 +62,12 @@ dumpall --context staging -o out-staging
 ## Options
 
 The resources of kind Secret are not dumped by default. If needed, use `--dump-secrets`.
+Printable values are then written as `stringData` (decoded from base64), so
+you can read and edit them directly; `kubectl apply` accepts `stringData` and
+the api-server stores it in `data`. Values that are not printable text (binary
+data, or control characters other than newline, tab and carriage return) stay
+base64-encoded in `data`. Use `--secrets-as-stringdata=false` to keep all
+values base64-encoded in `data`, like `kubectl get -o yaml`.
 
 To dump only specific namespaces, use `--namespaces` (or `-n`) with a comma-separated list, for example `--namespaces kube-system,default`.
 
@@ -162,7 +168,7 @@ Flags:
   -q, --quiet                           Quiet, suppress output
       --read-resource-names-from path   Read resource identifiers (kind/namespace/name) from a YAML file or directory and dump only those resources. Useful to dump a specific subset of cluster resources from the api-server.
       --read-yaml-from path             Deprecated, use kubenorm norm. Read YAML manifests from a file or directory instead of connecting to the api-server.
-      --secrets-as-stringdata           Write secret values as stringData (decoded from base64); requires --dump-secrets (-s)
+      --secrets-as-stringdata           With --dump-secrets (-s): write printable secret values as stringData (decoded from base64), so they are easy to read and edit; binary values stay in data. Use --secrets-as-stringdata=false to keep everything base64-encoded in data (default true)
       --skip-name-glob string           Skip resources where metadata.name matches this glob (e.g. 'foo-*' skips names starting with 'foo-')
   -O, --skip-owned                      Skip resources that have a controlling owner reference (e.g., Pods owned by a ReplicaSet) or that Kubernetes autogenerates from other resources (e.g., aggregated ClusterRoles)
 
